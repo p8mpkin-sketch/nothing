@@ -2,7 +2,14 @@
 
 > You Can Do Everything !
 
-**Nothing** 是一款 Chrome 浏览器扩展（Manifest V3），用于 Web 安全信息收集与漏洞辅助分析。浏览目标站点时自动采集页面敏感信息、识别技术栈指纹，集成静态规则检测与 AI 分析，覆盖 XSS 漏洞的发现、WAF 绕过 POC 生成与主动验证。
+**Nothing** 是一款 Chrome 浏览器扩展（Manifest V3），用于 Web 安全信息收集与漏洞辅助分析。
+
+> ⚡ **两大核心驱动力：AI + 规则引擎**
+
+- **🤖 AI 驱动**：接入大模型对扫描结果做智能研判——自动过滤误报、分析反射上下文、评估漏洞可利用性。支持 OpenAI / Anthropic / DeepSeek / 智谱 GLM / 自定义服务商，AI 不可用时自动降级为纯静态检测，不影响核心流程。
+- **🎯 规则引擎**：自定义路径 + 匹配模式主动发包探测，命中即告警。支持 CEL 表达式指纹（xray/afrog 风格）一键导入转为规则，Cookie 注入绕过浏览器请求限制。整站指纹按域名去重，同类命中不刷屏。
+
+浏览目标站点时自动采集敏感信息、识别技术栈指纹，覆盖反射型 XSS 的发现、WAF 绕过 POC 生成与后台标签主动验证（实测弹窗才标记"已验证"）。
 
 [![Version](https://img.shields.io/badge/version-1.5.0-blue)](https://github.com/p8mpkin-sketch/nothing)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](https://developer.chrome.com/docs/extensions/mv3/)
@@ -75,8 +82,6 @@ npm run build
 - **命中日志**：规则引擎命中记录
 - **设置**：扫描开关、AI 配置、POC 验证
 
-详细使用说明见 [USAGE.md](USAGE.md)。
-
 ---
 
 ## 🏗️ 架构
@@ -100,8 +105,6 @@ npm run build
 │  chrome.storage.session（会话级缓存）      │
 └──────────────────────────────────────────┘
 ```
-
-完整架构文档见 [DESIGN.md](DESIGN.md)，开发指南见 [PLUGIN_DEV_MANUAL.md](PLUGIN_DEV_MANUAL.md)。
 
 ### 项目结构
 
