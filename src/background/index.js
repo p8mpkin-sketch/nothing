@@ -613,6 +613,15 @@ async function verifyAndBadge(tabId, settings) {
 
         const verifiedCount = await verifyXssFindings(res.vulnerabilities);
 
+        // 对验证不通过的 XSS 降级：静态检测出的高危但实测打不动，不应该报 HIGH
+        for (const v of res.vulnerabilities) {
+            if (v.type?.toLowerCase().includes('xss') && v.verified === false) {
+                v.severity = 'low';
+                v.confidence = 0.3;
+                v.analysis = (v.analysis || '') + '\n\n⚠️ POC 未通过实测验证：后台加载候选 POC 后未检测到弹窗。可能被 WAF 拦截、反射点不可利用或上下文判断有误，请手动验证。';
+            }
+        }
+
         res.analyzedAt = Date.now();
         if (verifiedCount > 0) {
             res.summary = `${res.summary || ''}（${verifiedCount} 个已实测弹窗）`.replace(/^（/, '发现漏洞（');

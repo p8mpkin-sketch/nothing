@@ -446,11 +446,18 @@ class StaticXssDetector {
 
         if (value.length < 3) return vulns;
 
+        // 常见 JS 字面量——到处出现但绝不可能是 XSS
+        const jsLiterals = new Set(['true', 'false', 'null', 'undefined', 'nan', 'infinity']);
+        if (jsLiterals.has(value.toLowerCase())) return vulns;
+
+        // 纯字母/数字的短标识符（<8 字符）如变量名/键名，命中大概率是误报
+        if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(value) && value.length < 8) return vulns;
+
         for (const snippet of snippets) {
             if (!snippet.includes(value)) continue;
 
             // 检查是否在JS字符串字面量中
-            // 匹配 "value" 或 'value'
+            // 匹配 "value" 或 'value'，且 value 必须处于可注入位置（靠近字符串结尾）
             const doubleQuotePattern = new RegExp(`"[^"]*${this.escapeRegex(value)}[^"]*"`, 'i');
             const singleQuotePattern = new RegExp(`'[^']*${this.escapeRegex(value)}[^']*'`, 'i');
 
@@ -459,7 +466,37 @@ class StaticXssDetector {
             else if (singleQuotePattern.test(snippet)) quoteType = "'";
 
             if (quoteType) {
+                // 找到值的实际匹配位置，检查它是否处于字符串的"可跳出"位置
+                const quote = quoteType;
+                const idx = snippet.indexOf(value);
+                if (idx === -1) continue;
+
+                // 检查值后面的首个闭合引号距离——太远说明值埋在字符串中间，无法控制上下文
+                const afterSlice = snippet.substring(idx + value.length, idx + value.length + 100);
+                const closeIdx = afterSlice.indexOf(quote);
+                const distanceToClose = closeIdx === -1 ? 999 : closeIdx;
+
+                // 检查值前面的开引号
+                const beforeSlice = snippet.substring(Math.max(0, idx - 50), idx);
+                const openIdx = beforeSlice.lastIndexOf(quote);
+                const charsBefore = openIdx === -1 ? 999 : beforeSlice.length - openIdx - 1;
+
                 let confidence = 0.7;
+
+                // 如果值两边紧贴引号（"VALUE"），值就是整个字符串内容——强证据
+                const valueStartsRightAt = charsBefore === 0;
+                const valueEndsRightAt = distanceToClose === 0;
+
+                if (valueStartsRightAt && valueEndsRightAt) {
+                    confidence += 0.1; // 值独占字符串，最可靠的注入点
+                } else if (distanceToClose > 5) {
+                    // 值后面还有 5+ 个字符才闭合——埋在中部，很难利用
+                    continue;
+                }
+
+                // 检查值是不是在 JSON 键的位置（"key": 这种），是则跳过
+                const afterTrim = afterSlice.substring(0, Math.min(distanceToClose + 5, 50)).trim();
+                if (afterTrim.startsWith(':')) continue;
                 if (this.highRiskParamNames.includes(name.toLowerCase())) confidence += 0.1;
 
                 // 检查是否在赋值语句中
