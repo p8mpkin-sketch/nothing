@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DOM XSS 测试页面</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; background: #f5f5f5; }
+    h1 { color: #333; }
+    .card { background: white; border-radius: 8px; padding: 20px; margin: 20px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    .card h2 { margin-top: 0; color: #555; font-size: 1rem; }
+    input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+    button { margin-top: 8px; padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    .output { margin-top: 12px; padding: 10px; background: #f9f9f9; border: 1px solid #eee; border-radius: 4px; min-height: 40px; }
+    .note { font-size: 0.8rem; color: #999; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <h1>DOM XSS 漏洞测试页面</h1>
+  <p>本页面包含多个真实 DOM XSS 漏洞，用于测试安全插件的检测能力。</p>
+
+  <!-- 漏洞1: URL hash 直接写入 innerHTML -->
+  <div class="card">
+    <h2>漏洞1: Hash 参数注入 innerHTML</h2>
+    <div id="output1" class="output">等待输出...</div>
+    <p class="note">测试: <code>#&lt;img src=x onerror=alert(1)&gt;</code></p>
+  </div>
+
+  <!-- 漏洞2: URL search 参数写入 innerHTML -->
+  <div class="card">
+    <h2>漏洞2: URL 查询参数注入</h2>
+    <div id="output2" class="output">等待输出...</div>
+    <p class="note">测试: <code>?name=&lt;script&gt;alert(2)&lt;/script&gt;</code></p>
+  </div>
+
+  <!-- 漏洞3: document.write -->
+  <div class="card">
+    <h2>漏洞3: document.write 注入</h2>
+    <div id="output3" class="output">等待输出...</div>
+    <p class="note">测试: <code>?msg=&lt;img src=x onerror=alert(3)&gt;</code></p>
+  </div>
+
+  <!-- 漏洞4: eval 执行 -->
+  <div class="card">
+    <h2>漏洞4: eval() 执行用户输入</h2>
+    <input id="evalInput" placeholder="输入表达式，如: 1+1" />
+    <button onclick="runEval()">执行</button>
+    <div id="output4" class="output"></div>
+    <p class="note">测试: <code>alert('XSS')</code></p>
+  </div>
+
+  <!-- 漏洞5: jQuery html() -->
+  <div class="card">
+    <h2>漏洞5: jQuery .html() 注入</h2>
+    <div id="output5" class="output">等待输出...</div>
+    <p class="note">测试: <code>?html=&lt;img src=x onerror=alert(5)&gt;</code></p>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

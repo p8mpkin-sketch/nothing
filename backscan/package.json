@@ -1,0 +1,15 @@
+{
+  "name": "backup-scan-test-server",
+  "version": "1.0.0",
+  "description": "测试服务器用于验证 Nothing 插件的备份文件扫描功能",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["test", "backup", "security"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

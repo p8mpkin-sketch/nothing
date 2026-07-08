@@ -1,0 +1,50 @@
+{
+    "manifest_version": 3,
+    "name": "Nothing",
+    "version": "1.5.0",
+    "description": "You Can Do Everything !",
+    "permissions": [
+        "storage",
+        "notifications",
+        "tabs",
+        "activeTab",
+        "offscreen",
+        "scripting",
+        "declarativeNetRequest",
+        "webRequest"
+    ],
+    "host_permissions": [
+        "<all_urls>"
+    ],
+    "background": {
+        "service_worker": "assets/background.js",
+        "type": "module"
+    },
+    "action": {
+        "default_popup": "popup.html",
+        "default_title": "Nothing"
+    },
+    "options_page": "options.html",
+    "icons": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    },
+    "content_scripts": [
+        {
+            "matches": ["http://*/*", "https://*/*"],
+            "js": [
+                "assets/scanner.config.js",
+                "assets/scanner.filter.js",
+                "assets/content.js"
+            ],
+            "run_at": "document_idle"
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": ["icons/*"],
+            "matches": ["<all_urls>"]
+        }
+    ]
+}
