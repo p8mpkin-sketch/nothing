@@ -140,10 +140,6 @@ nothing-plugin/
 │       ├── aiProviders.js     # AI 服务商注册表
 │       ├── exclusionMatcher.js
 │       └── fingerprintImporter.js  # CEL→规则引擎翻译器
-├── test/                      # 测试文件
-├── DESIGN.md                  # 架构设计文档
-├── PLUGIN_DEV_MANUAL.md       # 插件开发手册
-├── USAGE.md                   # 使用说明
 └── vite.config.js
 ```
 
@@ -218,22 +214,12 @@ nothing-plugin/
 
 ---
 
----
-
 ## 🔧 技术栈
 
 - **框架**：Chrome Extension Manifest V3 + React 18 + Vite 5
 - **AI**：OpenAI / Anthropic / DeepSeek / 智谱 GLM 多服务商适配
 - **依赖**：js-yaml（指纹解析）
 - **权限**：scripting、declarativeNetRequest、webRequest、tabs、storage、notifications、offscreen
-
----
-
-## 📖 文档
-
-- [USAGE.md](USAGE.md) — 使用说明
-- [DESIGN.md](DESIGN.md) — 架构设计
-- [PLUGIN_DEV_MANUAL.md](PLUGIN_DEV_MANUAL.md) — 插件开发手册
 
 ---
 
