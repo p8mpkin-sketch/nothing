@@ -1,7 +1,0 @@
-﻿Name,Enabled,Mode,ProbePath,RequestHeaders,MatchScope,MatchStatusCode,MatchCondition,MatchType,Pattern,PassiveScope
-"Actuator",true,active,"/actuator/","",body,,and,contains,"""templated"":false",body
-"润棋报表",true,active,"/reportServlet?action=1","",body,200,and,contains,"com.raqsoft.common",url
-"Tongweb ejb",true,active,"/ejbserver/ejb|/..;page=/ejbserver/ejb","",body,200,and,contains,"^$",url
-"宝兰德 ejb",true,active,"/BesEJB/spark","",body,500,and,contains,"^$",url
-"XXL_JOB",true,active,"/xxl-job-admin/toLogin","",body,200,and,contains,"/xxl-job-admin/static/",url
-"Node.js",true,active,"/","",body,200,and,contains,"/_next/static/",url
