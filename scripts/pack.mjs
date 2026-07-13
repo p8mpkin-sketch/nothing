@@ -1,5 +1,6 @@
 import { createRequire } from 'module';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const require = createRequire(import.meta.url);
@@ -16,6 +17,15 @@ try {
       crxOutputPath: `${root}/nothing-plugin.crx`,
     }
   );
+
+  // crx3 ignores crxOutputPath and always outputs web-extension.crx
+  const defaultOut = `${root}/web-extension.crx`;
+  const targetOut = `${root}/nothing-plugin.crx`;
+  if (fs.existsSync(defaultOut)) {
+    fs.cpSync(defaultOut, targetOut);
+    fs.rmSync(defaultOut);
+  }
+
   console.log(`✅ CRX3 created: nothing-plugin.crx`);
   console.log(`   App ID: ${info?.appId || 'unknown'}`);
 } catch (err) {
