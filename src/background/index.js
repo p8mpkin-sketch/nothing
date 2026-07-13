@@ -278,6 +278,23 @@ function mergeProbeSnippetsToScan(tabId, snippets = []) {
     if (!tabScanResults[tabId]) tabScanResults[tabId] = {};
     if (!tabScanResults[tabId].inlineScriptProbeSnippet) tabScanResults[tabId].inlineScriptProbeSnippet = [];
 
+    // Extract param name + marker from probe snippets and inject into pageParamSample
+    // so the pipeline can match the long probe value against snippets.
+    for (const s of snippets) {
+        const m = s.match(/^INLINE_SCRIPT_PROBE_SNIPPET\s*\(param=([^,]+),\s*marker=([^)]+)\):/);
+        if (m) {
+            const paramName = m[1].trim();
+            const marker = m[2].trim();
+            if (paramName && marker) {
+                if (!tabScanResults[tabId].pageParamSample) tabScanResults[tabId].pageParamSample = [];
+                const probeEntry = `PARAM: ${paramName}=${marker}`;
+                if (!tabScanResults[tabId].pageParamSample.includes(probeEntry)) {
+                    tabScanResults[tabId].pageParamSample.push(probeEntry);
+                }
+            }
+        }
+    }
+
     const existing = new Set(tabScanResults[tabId].inlineScriptProbeSnippet);
     for (const s of snippets) existing.add(s);
     tabScanResults[tabId].inlineScriptProbeSnippet = [...existing].slice(0, 5);
@@ -817,7 +834,29 @@ async function autoAnalyzeVulns(tabId, pageUrl) {
             if (!tabAiStatus[tabId]) tabAiStatus[tabId] = {};
             tabAiStatus[tabId].vuln = 'done';
             updateHighVulnBadge(tabId);
+            await verifyAndBadge(tabId, settings);
+            return;
         }
+        // Pipeline 无发现时，走反射探针重试
+        if (shouldProbeReflection(scanData, settings)) {
+            try {
+                await probeParamReflection(tabId, pageUrl, pageParams);
+            } catch {}
+            const scanData2 = tabScanResults[tabId] || scanData;
+            if ((scanData2.inlineScriptProbeSnippet || []).length > 0) {
+                const probeResults = await runPipeline(scanData2, pageUrl, settings);
+                if (probeResults && probeResults.vulnerabilities.length > 0) {
+                    tabVulnResults[tabId] = probeResults;
+                    if (!tabAiStatus[tabId]) tabAiStatus[tabId] = {};
+                    tabAiStatus[tabId].vuln = 'done';
+                    updateHighVulnBadge(tabId);
+                    await verifyAndBadge(tabId, settings);
+                    return;
+                }
+            }
+        }
+        tabAiStatus[tabId].vuln = 'done';
+        updateHighVulnBadge(tabId);
         return;
     }
 

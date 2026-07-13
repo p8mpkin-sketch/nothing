@@ -829,10 +829,14 @@ export function extractParamNames(pageParamSample) {
 }
 
 export function extractParamValue(pageParamSample, paramName) {
+  let best = null;
   for (const s of (pageParamSample || [])) {
     if (typeof s !== 'string') continue;
     const m = s.match(new RegExp(`^PARAM:\\s*${paramName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=(.*)$`));
-    if (m) return m[1];
+    if (m) {
+      // 优先用最长的值（通常是 probe marker），短数值 "1"、"a" 等做最后备选
+      if (!best || m[1].length > best.length) best = m[1];
+    }
   }
-  return null;
+  return best;
 }
