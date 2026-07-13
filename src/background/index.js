@@ -771,7 +771,7 @@ async function autoAiFilter(tabId) {
     const total = Object.values(scanData).reduce((s, a) => s + a.length, 0);
     if (total === 0) return;
 
-    const settings = await new Promise(r => chrome.storage.local.get('settings', d => r(d.settings || {})));
+    const settings = withDefaults(await new Promise(r => chrome.storage.local.get('settings', d => r(d.settings || {}))));
     if (!settings.aiKey || !settings.aiAnalysis) return;
 
     if (!tabAiStatus[tabId]) tabAiStatus[tabId] = {};
@@ -807,7 +807,7 @@ async function autoAnalyzeVulns(tabId, pageUrl) {
     // If no JS files and no reflected evidence, skip (keep old behavior)
     if (jsFiles.length === 0 && !hasReflectedEvidence) return;
 
-    const settings = await new Promise(r => chrome.storage.local.get('settings', d => r(d.settings || {})));
+    const settings = withDefaults(await new Promise(r => chrome.storage.local.get('settings', d => r(d.settings || {}))));
 
     // 如果AI未配置，使用流水线检测（上下文分析 + POC 生成 + 验证）
     if (!settings.aiKey || !settings.aiAnalysis) {
@@ -1571,9 +1571,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (hasXssEvidence && request.url) {
                 clearTimeout(tabStaticXssTimers[tabId]);
                 tabStaticXssTimers[tabId] = setTimeout(async () => {
-                    const settings = await chrome.storage.local.get('settings');
+                    const raw = await chrome.storage.local.get('settings');
+                    const s = withDefaults(raw.settings);
                     // 只在AI关闭时执行静态检测
-                    if (!settings.settings?.aiAnalysis || !settings.settings?.aiKey) {
+                    if (!s.aiAnalysis || !s.aiKey) {
                         const result = staticXssDetector.analyze(tabScanResults[tabId], request.url);
                         if (result.vulnerabilities.length > 0) {
                             tabVulnResults[tabId] = result;
