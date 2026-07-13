@@ -126,7 +126,7 @@ export class ActiveScanner {
 
     async loadSettings() {
         const data = await chrome.storage.local.get(['settings', 'rules', 'exclusions']);
-        this.enabled = data.settings?.activeScan || false;
+        this.enabled = data.settings?.activeScan !== false;
 
         const allRules = data.rules || [];
         this.activeRules = allRules.filter(r => r.probePath && r.enabled);

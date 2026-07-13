@@ -1644,12 +1644,12 @@ function SettingsTab() {
   }
 
   const TOGGLES = [
-    { key: 'activeScan', label: '主动扫描', desc: '主动探测配置的路径规则（也用于 XSS 参数探针）' },
+    { key: 'activeScan', label: '主动扫描', desc: '主动探测配置的路径规则（也用于 XSS 参数探针）', defaultOn: true },
     { key: 'backupScan', label: '备份文件扫描', desc: '扫描备份文件、版本控制泄露等敏感文件' },
-    { key: 'dynamicScan', label: '动态扫描', desc: '监听 SPA 页面动态内容变化' },
-    { key: 'deepScan', label: '深度扫描', desc: '获取并扫描外部 JS 文件内容' },
+    { key: 'dynamicScan', label: '动态扫描', desc: '监听 SPA 页面动态内容变化', defaultOn: true },
+    { key: 'deepScan', label: '深度扫描', desc: '获取并扫描外部 JS 文件内容', defaultOn: true },
     { key: 'aiAnalysis', label: 'AI 分析', desc: '自动使用 AI 过滤误报和分析漏洞（消耗 token）' },
-    { key: 'pocVerify', label: 'POC 主动验证', desc: '后台自动加载 XSS POC 实测是否弹窗，只保留真正能打的（会短暂打开后台标签触发 payload）', defaultOn: true },
+    { key: 'pocVerify', label: 'POC 主动验证', desc: '后台自动加载 XSS POC 实测是否弹窗，只保留真正能打的（会短暂打开后台标签触发 payload）' },
   ]
 
   const provider = settings.aiProvider || 'openai'

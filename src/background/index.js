@@ -86,10 +86,24 @@ function buildPocUrls(pageUrl, paramName, payloads) {
     return out;
 }
 
+// ── Default settings ──────────────────────────────────────────────────────────
+const DEFAULT_SETTINGS = {
+    activeScan: true,
+    dynamicScan: true,
+    deepScan: true,
+    backupScan: false,
+    aiAnalysis: false,
+    pocVerify: false,
+};
+
+function withDefaults(stored) {
+    return { ...DEFAULT_SETTINGS, ...(stored || {}) };
+}
+
 // ── Reflected XSS: Parameter Reflection Probe (same-origin, lightweight) ───────
-function shouldProbeReflection(scanData = {}, settings = {}) {
-    // Reuse activeScan as the master switch for probe
-    if (!settings?.activeScan) return false;
+function shouldProbeReflection(scanData = {}, rawSettings = {}) {
+    const settings = withDefaults(rawSettings);
+    if (!settings.activeScan) return false;
 
     const pageParams = scanData.pageParamSample || [];
     const inlineSnippets = scanData.inlineScriptSnippet || [];
@@ -531,15 +545,10 @@ function updateHighVulnBadge(tabId) {
 }
 
 // 主动验证当前标签漏洞结果里的 XSS POC（哪条真弹窗），完成后刷新徽标。
-// 默认开启（settings.pocVerify !== false），可在设置里关闭。
-//
-// 三态结果：
-//   verified       → 弹窗了 ✓ 保持 HIGH
-//   wafBlocked     → 被 WAF 拦 🛡️ 触发 AI 绕过 → 绕过成功 ✓ / 绕过失败 ⛔
-//   falsePositive  → 误报 ✂️ 从结果中删除
+// 默认关闭（settings.pocVerify === true 时才启用），可在设置里开启。
 async function verifyAndBadge(tabId, settings) {
     try {
-        if (settings?.pocVerify === false) return;
+        if (!settings?.pocVerify) return;
         const res = tabVulnResults[tabId];
         if (!res || !Array.isArray(res.vulnerabilities) || res.vulnerabilities.length === 0) return;
         const hasXss = res.vulnerabilities.some(v => v?.type && v.type.toLowerCase().includes('xss'));
@@ -1655,7 +1664,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === 'GET_SETTINGS') {
         chrome.storage.local.get('settings', (data) => {
-            sendResponse({ settings: data.settings || {} });
+            sendResponse({ settings: withDefaults(data.settings) });
         });
         return true;
     }
