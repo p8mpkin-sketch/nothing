@@ -20,6 +20,7 @@ Thumbs.db
 *.jpg
 *.jpeg
 *.png
+!public/icons/*.png
 *.gif
 
 # IDE

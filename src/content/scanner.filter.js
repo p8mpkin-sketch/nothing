@@ -96,6 +96,10 @@ window.SCANNER_FILTER = {
         if (/^e\.[a-zA-Z]/.test(val)) return false;
         // 值是 JS 对象属性链（如 e.authorization,displayType...）
         if (/[a-z]\.[a-zA-Z]/.test(val) && val.includes(',')) return false;
+        // 值是路径/URL（API 端点定义，如 password="/api/reset" 里的 "/api/reset"）
+        if (/^\/[a-zA-Z0-9_\-./]/.test(val)) return false;
+        // 值为纯数字
+        if (/^\d+$/.test(val)) return false;
         // 必须包含至少一个数字或特殊字符，纯字母可读词组不算密钥
         const hasEntropy = /[0-9!@#$%^&*\-_+=\/\\]/.test(val);
         if (!hasEntropy) return false;

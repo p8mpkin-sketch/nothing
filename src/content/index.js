@@ -57,11 +57,10 @@
                         const secret = match[2] || match[1];
                         if (!FILTER.isRealSecret(secret)) continue;
 
-                        // Additional filtering: skip if looks like API path
-                        const fullMatch = match[0];
-                        if (/^[a-zA-Z]+:\s*["']\/[a-z\-\/]+["']/.test(fullMatch)) {
-                            // Pattern like: password:"/auth/change-password" or token:"/api/reset"
-                            // This is likely API endpoint definition, not credential leak
+                        // Additional filtering: skip if value looks like an API path/URL
+                        if (/^\//.test(secret)) {
+                            // e.g. password="/open-server/developer/password/new" or token="/v3.0/open/access_token"
+                            // value 以 / 开头说明是路径定义，不是真密钥
                             continue;
                         }
 

@@ -248,6 +248,18 @@ function VulnItem({ v }) {
           <span style={{ background: 'var(--green)', color: 'white', padding: '2px 6px', borderRadius: 3, fontSize: '0.62rem', fontWeight: 700, marginLeft: 4 }}
             title="已在后台实测触发弹窗">✓ 已验证弹窗</span>
         )}
+        {v.verdict === 'waf_blocked' && (
+          <span style={{ background: '#eab308', color: 'black', padding: '2px 6px', borderRadius: 3, fontSize: '0.62rem', fontWeight: 700, marginLeft: 4 }}
+            title="POC 全部被 WAF 拦截，反射点可能存在">🛡️ WAF 拦截</span>
+        )}
+        {v.verdict === 'bypassing_ai' && (
+          <span style={{ background: '#6366f1', color: 'white', padding: '2px 6px', borderRadius: 3, fontSize: '0.62rem', fontWeight: 700, marginLeft: 4 }}
+            title="AI 正在尝试绕过 WAF">⏳ AI 绕过中</span>
+        )}
+        {v.verdict === 'bypass_failed' && (
+          <span style={{ background: '#ef4444', color: 'white', padding: '2px 6px', borderRadius: 3, fontSize: '0.62rem', fontWeight: 700, marginLeft: 4 }}
+            title="AI 绕过失败，当前 WAF 防护较强">⛔ 绕过失败</span>
+        )}
         {v.chain && <span className="vuln-chain">{v.chain}</span>}
         <span className="vuln-expand-hint">{open ? '收起' : '详情'}</span>
       </div>

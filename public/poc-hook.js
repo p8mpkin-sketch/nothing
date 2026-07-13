@@ -1,13 +1,20 @@
 // Nothing — POC verification hook (injected at document_start in the MAIN world).
-// Overrides dialog primitives so that an executing XSS payload is *recorded*
-// (flag on window) instead of popping a real modal that would block the tab.
-// The background reads window.__NOTHING_POC_FIRED__ after the page settles.
+// Records XSS execution via multiple side channels, not just alert():
+//
+//   Channel 1: window.__NOTHING_POC_FIRED__ (alert/confirm/prompt call)
+//   Channel 2: document.title contains marker
+//   Channel 3: document.cookie contains marker
+//   Channel 4: window.__NOTHING_POC_TITLE__  (title set by eval-like contexts)
+//
+// The background reads ALL channels after the page settles.
 (function () {
   try {
     if (window.__NOTHING_HOOKED__) return;
     window.__NOTHING_HOOKED__ = true;
     window.__NOTHING_POC_FIRED__ = false;
     window.__NOTHING_POC_MSG__ = '';
+    window.__NOTHING_POC_TITLE__ = null;
+    window.__NOTHING_POC_COOKIE__ = null;
 
     var mark = function (val) {
       window.__NOTHING_POC_FIRED__ = true;
