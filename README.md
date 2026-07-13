@@ -196,13 +196,3 @@ nothing-plugin/
 </details>
 
 小优化 patch 递增，大功能 minor 递增。
-
----
-
-## 技术栈
-
-Chrome Extension MV3 · React 18 · Vite 5 · js-yaml · OpenAI / Anthropic / DeepSeek / 智谱 GLM
-
----
-
-MIT © p8mpkin-sketch
