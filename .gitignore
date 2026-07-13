@@ -16,6 +16,9 @@ Thumbs.db
 # ZIP backups (version history managed by version/ directory)
 *.zip
 
+# CRX build artifacts (attached to releases, not tracked in git)
+*.crx
+
 # Test assets (images)
 *.jpg
 *.jpeg
@@ -34,6 +37,9 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# CRX private key (keep locally, never commit)
+key.pem
 
 # Claude local config
 .claude/settings.local.json
