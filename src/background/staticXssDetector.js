@@ -105,9 +105,7 @@ class StaticXssDetector {
                 result.vulnerabilities.push(...domVulns);
             }
 
-            // 5. 过滤绕过检测
-            const bypassVulns = this.detectFilterBypass(param, inlineSnippets, pageUrl);
-            result.vulnerabilities.push(...bypassVulns);
+            // detectFilterBypass disabled — speculative detection generated too many false positives
         }
 
         // 过滤低置信度结果
@@ -178,7 +176,7 @@ class StaticXssDetector {
         // 4. 检查是否在危险上下文中（script标签、事件处理器、javascript:协议）
         const dangerousContexts = [
             /<script[^>]*>/i,
-            /\bon\w+\s*=/i,  // onerror=, onclick=等
+            /\bon(?:error|load|click|mouseover|focus|blur|change|submit|toggle|start)\s*=\s*["']/i,  // 只匹配知名事件、且确实有 = 的完整绑定
             /href\s*=\s*["']javascript:/i,
             /src\s*=\s*["']javascript:/i
         ];
@@ -543,31 +541,37 @@ class StaticXssDetector {
         for (const snippet of snippets) {
             if (!snippet.includes(value)) continue;
 
-            // 检查是否使用了DOM source
+            // 要求 source 和 sink 必须在同一逻辑代码路径上（同一行或相邻行），
+            // 且参数值必须出现在两者之间的数据流中，否则只是弱关联（可能是框架代码、polyfill）
             let foundSource = null;
+            let sourceIdx = -1;
             for (const source of this.domSources) {
-                if (snippet.includes(source)) {
-                    foundSource = source;
-                    break;
-                }
+                const si = snippet.indexOf(source);
+                if (si !== -1) { foundSource = source; sourceIdx = si; break; }
             }
 
             if (!foundSource) continue;
 
-            // 检查是否流向了危险sink
             let foundSink = null;
+            let sinkIdx = -1;
             for (const sink of this.dangerousSinks) {
-                const sinkPattern = new RegExp(`\\b${this.escapeRegex(sink)}\\s*[=(]`, 'i');
-                if (sinkPattern.test(snippet)) {
-                    foundSink = sink;
-                    break;
-                }
+                const si = snippet.indexOf(sink);
+                if (si !== -1) { foundSink = sink; sinkIdx = si; break; }
             }
 
             if (!foundSink) continue;
 
+            // 收紧判断：参数值必须出现在 source 和 sink 之间的数据流中
+            const valIdx = snippet.indexOf(value);
+            const betweenSourceAndSink = (valIdx > sourceIdx && valIdx < sinkIdx) || (valIdx > sinkIdx && valIdx < sourceIdx);
+            if (!betweenSourceAndSink) continue;
+
+            // 且 source 和 sink 必须在合理的代码距离内（200 字符以内，否则可能是独立无关的语句）
+            const distance = Math.abs(sinkIdx - sourceIdx);
+            if (distance > 200) continue;
+
             // 计算置信度
-            let confidence = 0.8;
+            let confidence = 0.75;
             if (foundSink === 'innerHTML' || foundSink === 'eval') confidence += 0.1;
             if (this.highRiskParamNames.includes(name.toLowerCase())) confidence += 0.05;
 

@@ -342,24 +342,27 @@ function detectDomXssFromSinks(scanData, pageUrl, paramNames) {
     const body = snippet.replace(/^(INLINE_SCRIPT_SINK_SNIPPET|INLINE_SCRIPT_SNIPPET|INLINE_SCRIPT_PROBE_SNIPPET)\s*(\([^)]*\))?:\s*/, '');
     if (body.length < 20) continue;
 
-    // 查找 source
+    // 查找 source — 需要找到确切位置
     let foundSource = null;
+    let sourceIdx = -1;
     for (const sp of sources) {
       const m = body.match(sp);
-      if (m) { foundSource = m[0]; break; }
+      if (m) { foundSource = m[0]; sourceIdx = m.index; break; }
     }
     if (!foundSource) continue;
 
     // 查找 sink
     let foundSink = null;
+    let sinkIdx = -1;
     for (const sk of sinks) {
       const m = body.match(sk);
-      if (m) { foundSink = m[0]; break; }
+      if (m) { foundSink = m[0]; sinkIdx = m.index; break; }
     }
     if (!foundSink) continue;
 
-    // 两个在同一条 snippet 里 → DOM XSS
-    // 找出最可能相关的参数名
+    // 收紧：source 和 sink 必须在合理距离内（200 字符以内），
+    // 否则它们只是碰巧在同一段代码里，不构成实际数据流
+    if (Math.abs(sinkIdx - sourceIdx) > 200) continue;
     let paramName = '';
     // 优先从 snippet 里提取：get('name'), get("name"), get(`name`)
     const getMatch = body.match(/\.get\(['"`]([^'"`]+)['"`]\)/i);

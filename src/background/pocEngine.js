@@ -130,39 +130,37 @@ export function parseReflectionContext(snippet, paramValue) {
  * 编码检测：检查反射点被做了什么编码
  */
 function detectEncoding(snippet, paramValue, before, after) {
-  // 检查 snippet 中是否含 HTML 实体编码证据（&lt; &gt; &#xx;）
-  const snippetHasEntities = /&lt;|&gt;|&quot;|&#[0-9]+;|&#x[0-9a-f]+;/i.test(snippet);
+  const valIdx = snippet.indexOf(paramValue);
+  if (valIdx === -1) return ENC.NONE;
+
+  // ── 局部编码检测：只看参数值周围 50 字符，不用 snippet 全局范围 ──
+  const localStart = Math.max(0, valIdx - 50);
+  const localEnd = Math.min(snippet.length, valIdx + paramValue.length + 50);
+  const local = snippet.substring(localStart, localEnd);
+
+  // HTML 实体编码：参数值附近有 &lt; &gt; &quot; 或 &#xx;
+  const localHasEntities = /&lt;|&gt;|&quot;|&#[0-9]+;|&#x[0-9a-f]+;/i.test(local);
   const valueHasChevrons = /[<>]/.test(paramValue);
 
-  if (valueHasChevrons && snippetHasEntities && !snippet.includes('<') && !snippet.includes('>')) {
-    // 参数值里有 < > 但 snippet 里只有 &lt; &gt; — 被实体编码了
-    return ENC.HTML_ENTITY;
-  }
-
-  // ⭐ 新增：snippet 中存在实体编码，且参数值在 HTML 文本区域
-  // 即使参数值本身不含 <>（如 "false" "abc"），页面也在做实体编码
-  if (snippetHasEntities && !valueHasChevrons) {
-    const idx = snippet.indexOf(paramValue);
-    if (idx !== -1) {
-      const prefix = snippet.substring(0, idx);
-      const lastScriptOpen = prefix.lastIndexOf('<script');
-      const lastScriptClose = prefix.lastIndexOf('</script>');
-      const inHtmlText = lastScriptOpen <= lastScriptClose || lastScriptOpen === -1;
-      if (inHtmlText) {
-        // 在 HTML 文本中，且 snippet 任何地方有 &lt; → 整个页面在做实体编码
-        // 值本身不需要附近有 &lt;
-        return ENC.HTML_ENTITY;
-      }
+  if (localHasEntities) {
+    if (valueHasChevrons) {
+      // 参数值有 <> 但附近只有实体 → 被编码
+      if (!local.includes('<') && !local.includes('>')) return ENC.HTML_ENTITY;
     }
+    // 参数值在 HTML 文本区域且附近有实体 → 编码
+    const prefix = snippet.substring(0, valIdx);
+    const lastScriptOpen = prefix.lastIndexOf('<script');
+    const lastScriptClose = prefix.lastIndexOf('</script>');
+    const inHtmlText = lastScriptOpen <= lastScriptClose || lastScriptOpen === -1;
+    if (inHtmlText) return ENC.HTML_ENTITY;
   }
 
-  // 检查是否被 JSON.stringify
-  if (/\\"/.test(snippet.substring(Math.max(0, snippet.indexOf(paramValue) - 5), snippet.indexOf(paramValue)))) {
+  // 检查参数值附近是否被 JSON.stringify 转义 —— 即值前面有 \", 引号被转义了
+  const beforeSlice = snippet.substring(Math.max(0, valIdx - 20), valIdx);
+  if (/\\"/.test(beforeSlice) || /\\'/.test(beforeSlice) || /\\\\/.test(beforeSlice)) {
+    // 参数值前面的引号被转义了 → 值在 JSON.stringify 的输出中
+    return ENC.JS_ESCAPE;
   }
-
-  // 检查 JS 转义（如 \' \" \n）
-  const beforeSlice2 = snippet.substring(Math.max(0, snippet.indexOf(paramValue) - 5), snippet.indexOf(paramValue));
-  if (/\\\\/.test(beforeSlice2)) return ENC.JS_ESCAPE;
 
   return ENC.NONE;
 }
@@ -233,8 +231,11 @@ function classifyHtmlContext(ctx, before, after) {
     return;
   }
 
-  // 通用 HTML body
+  // 默认 HTML body —— 但标记是否在标签体内（value 前有 >），
+  // 以便 calcExploitability 区别对待：纯文本反射 ≠ 可注入的标签体上下文。
   ctx.contextType = CTX.HTML_BODY;
+  // 值前不远处有闭合的标签 > → 在标签体内，<img> 之类的可注入
+  ctx.inHtmlTagBody = />\s*$/.test(before.slice(-80));
 }
 
 /**
@@ -246,8 +247,23 @@ function classifyScriptContext(ctx, before, after, snippet) {
   const aTrim = after.trim();
   const last20 = before.slice(-20);
 
-  // 检查是否在注释中
-  if (/\/\/[^\n]*$/.test(before) || /\/\*[^*]*$/.test(before) || /<!--[^>]*$/.test(before)) {
+  // 检查是否在注释中 —— 排除 URL 模式 (http:// https://)
+  // 且确认不是字符串字面量内的 //
+  const before40 = before.slice(-40);
+  if (/\s\/\/[^\n]*$/.test(before40)) {
+    // 空格 + // → 是真正的单行注释（不是 http://）
+    if (!/https?:\/\/[^\n]*$/.test(before)) {
+      ctx.contextType = CTX.JS_COMMENT;
+      return;
+    }
+  }
+  // 多行注释：/* ... */  排除正则字符串里匹配到的 /*
+  if (/\/\*[^*]*$/.test(before) && !/\s*\/\//.test(last20)) {
+    ctx.contextType = CTX.JS_COMMENT;
+    return;
+  }
+  // HTML 注释 <!-- -->
+  if (/<!--[^>]*$/.test(before) && after.includes('-->')) {
     ctx.contextType = CTX.JS_COMMENT;
     return;
   }
@@ -267,9 +283,15 @@ function classifyScriptContext(ctx, before, after, snippet) {
   }
 
   // 检查 JSON 键位置（"key":）
+  // 严格条件：值前是 " 或 '，值后紧跟 : 且前面有 { 或 , 的结构证据
   if (/["']$/.test(last20) && (aTrim.startsWith(':') || /^:\s*/.test(aTrim))) {
-    ctx.contextType = CTX.JS_OBJECT_KEY;
-    return;
+    // 确认是真正的 JSON key：附近必须有 { 或 , 且在 key 位置
+    const nearBefore = before.slice(-80);
+    const isJsonStructure = /[{,]\s*["']$/.test(nearBefore) || /\{[^}]*["']$/.test(nearBefore.slice(-40));
+    if (isJsonStructure) {
+      ctx.contextType = CTX.JS_OBJECT_KEY;
+      return;
+    }
   }
 
   // 检查引号上下文 — 找出值周围的开闭引号
@@ -364,6 +386,8 @@ function classifySinkContext(ctx, fullSnippet) {
 function calcExploitability(ctx) {
   switch (ctx.contextType) {
     case CTX.HTML_BODY:
+      // 只有在标签体内（值前有>）才容易注入；纯文本段落反射几乎不可利用
+      return ctx.inHtmlTagBody ? 0.65 : 0.3;
     case CTX.HTML_ATTR_START:
     case CTX.HTML_ATTR_EVENT:
       return 0.75;
