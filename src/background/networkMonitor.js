@@ -1,6 +1,9 @@
 import { activeScanner } from './scanner';
+import { ruleEngine } from './ruleEngine';
 import { detectFingerprints, detectAnalyticsFromUrl } from './fingerprint';
 import { pendingProbes } from './probeRegistry';
+import { addLog } from './logger';
+import { matchContent } from './matchHelper';
 
 // tabJsMap: tabId -> Set<url> (JS request URLs)
 export const tabJsMap = {};
@@ -62,7 +65,6 @@ export class NetworkMonitor {
             (details) => {
                 // Active probe header matching FIRST — service-worker fetch() shows up
                 // with tabId === -1, so this must run before the tabId guard below.
-                // Uses 'extraHeaders' so it CAN read Set-Cookie (fetch() cannot).
                 if (pendingProbes.has(details.url)) {
                     const { rule, tabId } = pendingProbes.get(details.url);
                     pendingProbes.delete(details.url);
@@ -70,32 +72,12 @@ export class NetworkMonitor {
                     if (rule.matchScope === 'response_header') {
                         const headerString = (details.responseHeaders || [])
                             .map(h => `${h.name}: ${h.value}`).join('\n');
-                        console.log(`[NetworkMonitor] Probe headers for ${details.url}:`, headerString);
 
-                        const statusMatch = rule.matchStatusCode
-                            ? rule.matchStatusCode.split(',').map(c => c.trim()).includes(String(details.statusCode))
-                            : true;
-                        let contentMatch = false;
-                        if (rule.pattern === '^$') {
-                            contentMatch = !headerString || headerString.length === 0;
-                        } else if (rule.matchType === 'regex') {
-                            try { contentMatch = new RegExp(rule.pattern, 'i').test(headerString); } catch {}
-                        } else {
-                            contentMatch = headerString.toLowerCase().replace(/\s+/g, ' ')
-                                .includes(rule.pattern.toLowerCase().replace(/\s+/g, ' '));
-                        }
-                        const isMatch = rule.matchStatusCode
-                            ? (rule.matchCondition === 'or' ? (statusMatch || contentMatch) : (statusMatch && contentMatch))
-                            : contentMatch;
-
+                        const { isMatch, statusMatch, contentMatch } = matchContent(rule, headerString, details.statusCode);
                         console.log(`[NetworkMonitor] Probe header match for ${details.url}: statusMatch=${statusMatch}, contentMatch=${contentMatch}`);
                         if (isMatch) {
-                            import('./ruleEngine').then(({ ruleEngine }) => {
-                                ruleEngine.handleMatch(rule, { tabId, url: details.url, type: 'active-probe-header', statusCode: details.statusCode });
-                            });
-                            import('./logger').then(({ addLog }) => {
-                                addLog(rule.name, details.url, 'match', 'Pattern found in Response Headers (active probe)');
-                            });
+                            ruleEngine.handleMatch(rule, { tabId, url: details.url, type: 'active-probe-header', statusCode: details.statusCode });
+                            addLog(rule.name, details.url, 'match', 'Pattern found in Response Headers (active probe)');
                         }
                     }
                 }
@@ -110,23 +92,15 @@ export class NetworkMonitor {
                     }
                 }
 
-                // Build header string
-                const headerList = [];
-                if (details.responseHeaders) {
-                    details.responseHeaders.forEach(h => {
-                        headerList.push(`${h.name}: ${h.value}`);
-                    });
-                }
-                const headerString = headerList.join('\n');
+                // Build header string for passive rule matching
+                const headerString = (details.responseHeaders || [])
+                    .map(h => `${h.name}: ${h.value}`).join('\n');
 
-                // Passive rule matching (active-probe matching handled above the guard)
-                import('./ruleEngine').then(({ ruleEngine }) => {
-                    ruleEngine.match(headerString, 'response_header', {
-                        tabId: details.tabId,
-                        url: details.url,
-                        type: 'response_header',
-                        statusCode: details.statusCode,
-                    });
+                ruleEngine.match(headerString, 'response_header', {
+                    tabId: details.tabId,
+                    url: details.url,
+                    type: 'response_header',
+                    statusCode: details.statusCode,
                 });
             },
             { urls: ['<all_urls>'] },

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "pack": "node scripts/pack.mjs",
-    "release": "npm run build && npm run pack && cd dist && zip -r ../nothing-dist.zip . -x \"src/*\" && cd ..",
+    "release": "npm run build && npm run pack && cd dist && zip -r ../nothing-dist.zip . -x \"src/*\" -x \"*.DS_Store\" -x \"*/.DS_Store\" && cd ..",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },
