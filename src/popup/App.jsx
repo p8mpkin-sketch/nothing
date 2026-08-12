@@ -1650,6 +1650,7 @@ function SettingsTab() {
     { key: 'deepScan', label: '深度扫描', desc: '获取并扫描外部 JS 文件内容', defaultOn: true },
     { key: 'aiAnalysis', label: 'AI 分析', desc: '自动使用 AI 过滤误报和分析漏洞（消耗 token）' },
     { key: 'pocVerify', label: 'POC 主动验证', desc: '后台自动加载 XSS POC 实测是否弹窗，只保留真正能打的（会短暂打开后台标签触发 payload）' },
+    { key: 'probeMarker', label: '探测标记头', desc: '给所有主动探测请求加标记头（默认 X-Nothing-Probe: 1），便于在 Burp/代理里过滤隐藏，探测照常发起', defaultOn: true },
   ]
 
   const provider = settings.aiProvider || 'openai'

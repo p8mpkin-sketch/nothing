@@ -1,4 +1,5 @@
 import { addLog } from './logger';
+import { withProbeHeaders } from './probeMarker';
 
 /**
  * Backup File & Sensitive File Scanner
@@ -458,6 +459,7 @@ export class BackupScanner {
                 credentials: 'omit',
                 redirect: 'manual',
                 signal: AbortSignal.timeout(5000),
+                headers: withProbeHeaders(),
             });
 
             // 只接受 200 状态码

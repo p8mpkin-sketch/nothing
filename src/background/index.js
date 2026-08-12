@@ -9,6 +9,7 @@ import { verifyXssFindings } from './pocVerifier';
 import { getProvider, resolveAiUrl } from '../utils/aiProviders';
 import { generatePocs, parseReflectionContext, extractParamNames, extractParamValue, wafStrategy, CTX, ENC } from './pocEngine';
 import { runPipeline } from './detectionPipeline';
+import { withProbeHeaders } from './probeMarker';
 
 // Build deterministic POC candidates for reflected XSS (post-process AI result)
 function guessQuoteFromInlineSnippets(inlineSnippets = []) {
@@ -94,6 +95,11 @@ const DEFAULT_SETTINGS = {
     backupScan: false,
     aiAnalysis: false,
     pocVerify: false,
+    // Probe marker header: tags extension-initiated scan traffic so it can be
+    // filtered out in Burp / proxy tools while probing still works.
+    probeMarker: true,
+    probeMarkerName: 'X-Nothing-Probe',
+    probeMarkerValue: '1',
 };
 
 function withDefaults(stored) {
@@ -225,6 +231,7 @@ async function fetchHtml(url) {
             credentials: 'include',
             redirect: 'manual',
             signal: AbortSignal.timeout(4000),
+            headers: withProbeHeaders(),
         });
         const text = await r.text();
         return (text || '').slice(0, 120000);
@@ -983,7 +990,7 @@ async function autoAnalyzeVulns(tabId, pageUrl) {
     const prioritized = [...sameOrigin, ...crossOrigin].slice(0, 5);
 
     const fetchOne = async (url) => {
-        const r = await fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(6000) });
+        const r = await fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(6000), headers: withProbeHeaders() });
         const text = await r.text();
         return { url, content: text, size: text.length };
     };
@@ -1778,7 +1785,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 const jsContents = [];
                 for (const url of jsUrls) {
                     try {
-                        const r = await fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(5000) });
+                        const r = await fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(5000), headers: withProbeHeaders() });
                         const text = await r.text();
                         // Only send first 8000 chars per file to avoid token overflow
                         jsContents.push({ url, content: text.slice(0, 8000) });
@@ -1832,7 +1839,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (/^\s*<(?:!doctype|html)/i.test(text)) return false;
             return true;
         };
-        fetch(request.url, { credentials: 'omit', redirect: 'follow' })
+        fetch(request.url, { credentials: 'omit', redirect: 'follow', headers: withProbeHeaders() })
             .then(async r => {
                 if (!r.ok || r.redirected) return await viaPage();
                 const text = await r.text();

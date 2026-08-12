@@ -4,6 +4,7 @@ import { getParentHierarchies } from './urlParser';
 import { isExcluded } from '../utils/exclusionMatcher';
 import { pendingProbes } from './probeRegistry';
 import { matchContent } from './matchHelper';
+import { withProbeHeaders } from './probeMarker';
 
 /**
  * Active Scanner to probe specific paths on the target domain.
@@ -220,7 +221,11 @@ export class ActiveScanner {
         const dnrId = await this.applyHeaderInjection(targetUrl, rule.requestHeaders);
 
         try {
-            const fetchOptions = { credentials: 'include', redirect: 'manual' };
+            const fetchOptions = {
+                credentials: 'include',
+                redirect: 'manual',
+                headers: withProbeHeaders(),
+            };
 
             if (rule.matchScope === 'response_header') {
                 pendingProbes.set(targetUrl, { rule, tabId });

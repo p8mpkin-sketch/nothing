@@ -26,6 +26,7 @@ AI 和规则引擎是两条主线：AI 负责过滤误报和研判漏洞上下�
 - 响应头 / Cookie / HTML 多维提取技术栈，覆盖 Spring Boot、Jenkins、GitLab、Kong 等 30+ 框架
 - declarativeNetRequest 会话规则注入 Cookie，绕过 fetch 限制
 - [`rules_example.csv`](rules_example.csv) 提供规则引擎的简单样例，覆盖 Actuator、Druid、Nacos、Shiro 等常见中间件指纹探测，可直接参考或导入使用
+- 探测标记头：所有主动探测请求带 `X-Nothing-Probe: 1`，可在 Burp 里一键过滤隐藏（见下方）
 
 **XSS 检测与 POC 验证**
 - 静态检测覆盖 HTML 标签注入、属性注入、JS 字符串注入、DOM XSS、过滤绕过
@@ -55,6 +56,24 @@ npm run build
 Chrome 打开 `chrome://extensions/` → 开发者模式 → 加载已解压的扩展程序 → 选 `dist/` 目录。
 
 打开任意网页点扩展栏的 N 图标即开始扫描。结果分高危/中危/低危三级，支持搜索、复制全部。
+
+---
+
+## 在 Burp 里隐藏插件的探测流量
+
+主动扫描、备份扫描、XSS 参数探针等发出的所有请求都带一个标记头（默认 `X-Nothing-Probe: 1`）。抓包时这些请求依然会真实发出并被拦截，只是可以在代理 UI 里一键过滤掉，避免淹没手工测试流量。
+
+> ⚠️ 说明：浏览器扩展用的是浏览器网络栈，**无法绕过系统代理或网卡抓包**——真正发出去的包一定在链路上。所谓"隐藏"是靠标记头 + 代理侧过滤实现的，不是让请求隐形。
+
+**Burp 过滤配置**（Proxy → HTTP history）：
+
+1. 点击 history 上方的 **Filter** 栏
+2. 在 **"Filter by request"** 区域找到 **"Hide items"** 或用 **Filter by search term**
+3. 勾选 **"Hide"**，搜索项填 `X-Nothing-Probe`，范围选 **Request headers**
+
+或者用 Burp 的 **Filter by annotation / 高亮规则** 把带该头的请求标灰。也可以在 **Proxy → Options → Match and Replace** 之外，直接在 history 的 display filter 里排除。
+
+**关闭标记头**：设置页把「探测标记头」开关关掉即可（关闭后探测请求不带任何标记，与普通请求无异，但也就无法在代理里按此过滤）。也可在设置里自定义头名/值。
 
 ---
 
