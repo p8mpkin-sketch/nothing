@@ -6,7 +6,7 @@ Nothing 是一个 Chrome 浏览器扩展（Manifest V3），浏览网页时自�
 
 AI 和规则引擎是两条主线：AI 负责过滤误报和研判漏洞上下文（支持 OpenAI / Anthropic / DeepSeek / 智谱 GLM，AI 不可用时切回静态检测），规则引擎负责主动发包探测 + 指纹命中告警（支持粘贴 xray/afrog 风格 CEL 表达式一键导入）。
 
-[![Version](https://img.shields.io/badge/version-1.6.0-blue)](https://github.com/p8mpkin-sketch/nothing)
+[![Version](https://img.shields.io/badge/version-1.7.5-blue)](https://github.com/p8mpkin-sketch/nothing)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](https://developer.chrome.com/docs/extensions/mv3/)
 [![License](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
@@ -142,6 +142,50 @@ nothing-plugin/
 ---
 
 ## 版本更新
+
+### V1.7.5 — 2026-11-02
+引擎算法优化(⑧):DOM XSS 轻量变量 taint
+- `detectDomXssFromSinks` 不再只靠"source/sink 200 字符邻近"判数据流。新增 `traceDomTaint`:收集被 DOM source 污染的变量(`var x = ...location.search...`)并做至多 3 轮传播,若某 sink 用到污染变量(或直接用 source)即判为真实数据流 —— **任意距离**都能命中,修复远距离漏报
+- 保守不回归:taint 无法链接时仍退化到原 200 字符邻近判据;taint 确认的流置信度 0.8(高于邻近的 0.75)
+- 回归测试增至 81 条,新增 DOM taint 三例(远距离变量流新检出 / 邻近不回归 / 远距无链接不报)
+
+### V1.7.4 — 2026-11-02
+引擎算法优化(⑤):可利用性打分闭环校准
+- 新增 `ExploitabilityCalibrator`(与 `WafStrategyManager` 同构):按"上下文类型"累计 pocVerifier 实测弹窗率,反过来微调 `calcExploitability` 的打分,让引擎越用越准
+- **安全**:最小样本门槛 8,样本不足时 `calibrate()` 严格 no-op(不改变当前行为);漂移上限 ±0.2、夹在 [0,1],避免单点数据带偏;持久化到 `chrome.storage.local`,`onInstalled` 载回
+- 闭环接线:Phase 5 把 verified(正样本)/ falsePositive(负样本)按 `_contextType` 回流校准器;vuln 条目新增 `_contextType` 供归类
+- 回归测试增至 78 条,新增 `calibrator.test.js`(门槛 no-op / 升降调 / 漂移夹紧 / 上下文隔离 / 序列化往返)
+
+### V1.7.3 — 2026-11-02
+引擎算法优化(②):框架转义抑制收窄,减少漏报
+- `parseReflectionContext` 把框架自动转义抑制挪到上下文分类之后,**只对 HTML 文本插值上下文(HTML_BODY)抑制**。旧逻辑只要页面出现 react/vue 字样就对所有上下文一律 `exploitability=0`,把内联脚本里 `el.innerHTML=参数` 这类 JS 字符串 / DOM sink / 模板 / 属性反射也误杀 —— 这些数据流绕过框架的 JSX/模板转义,不应被抑制
+- `dangerouslySetInnerHTML` / `v-html` 例外仍保留
+- 回归测试增至 71 条,新增框架收窄专项(React 页 JS 字符串反射不再抑制 / HTML 文本反射仍抑制 / dangerouslySetInnerHTML 例外)
+
+### V1.7.2 — 2026-11-02
+引擎算法优化(⑥核心 / ⑦核实)
+- **favicon 哈希工具**(⑥ 核心):新增 `src/utils/faviconHash.js`,实现 MurmurHash3 x86_32 + fofa/shodan 风格 favicon 哈希(base64 折行 + 有符号 32 位输出)。mmh3 已对公开向量逐一校验(`("",1)=0x514e28b7` 等)。抓取 favicon + 接入指纹结果与 UI 展示为后续集成步骤(需真实扩展验证)
+- **ReDoS 核实**(⑦):实测 `scanner.config.js` 的 api/url 正则在 60–90K 病态输入下均 ≤1ms —— `.`/引号为确定分隔符,不具备指数回溯的重叠歧义,**无 ReDoS 风险**,不做改动(避免对精度工具的臆测性修改)
+- 回归测试增至 68 条,新增 `faviconHash.test.js`(mmh3 公开向量 + base64 折行 + 有符号输出)
+
+### V1.7.1 — 2026-11-02
+引擎算法优化(④):密钥检测香农熵下限
+- `isRealSecret` 新增香农熵判定:`hasEntropy`(含数字/符号)之外再加熵下限 2.5 bits/char,拦掉高度重复/低多样性的垃圾值(`aaaaaa`、`121212`、`------`),真密钥熵普遍 >3 不受影响
+- `scanner.filter.js` 导出 `shannonEntropy` 供复用与测试
+- 回归测试增至 59 条,新增 `scannerFilter.test.js`(经 window stub 测内容脚本,不改 IIFE 形态)
+
+### V1.7.0 — 2026-11-02
+引擎算法优化(第一批):XSS 上下文精度 + 规则引擎性能
+- **上下文引擎词法状态机**:`classifyScriptContext` 不再用 `lastIndexOf` 猜引号归属,改为从反射点前文逐字符扫描维护词法状态栈。正确处理转义引号 `\"`、已闭合的前一个字符串、注释内引号、`http://` 里的 `//`、模板字面量与 `${}` 嵌套 —— 直接减少 JS 字符串注入的误报与漏报
+- **规则引擎编译缓存**:`matchContent` 不再每次 `new RegExp()`,按 pattern 缓存编译结果(非法正则缓存 null);keyword 归一化按 content 单条 memo,同一响应循环规则时只算一次。编译/归一成本从 O(规则×请求) 降到 O(唯一 pattern)
+- 回归测试增至 47 条,新增状态机专项用例(已闭合字符串/http:/转义引号/模板嵌套)与缓存一致性用例
+
+### V1.6.2 — 2026-11-01
+开发基建:引入测试回归护栏(无运行时变更)
+- 接入 vitest:`npm test` 一键跑,`npm run test:watch` 监听
+- 覆盖 5 个纯逻辑模块(urlParser / matchHelper / pocEngine / staticXssDetector / detectionPipeline)共 38 条用例
+- 误报语料:`staticXssDetector.test.js` 建立 `notXss`/`isXss` 数据驱动语料,约定"每修一个误报加一条",后续收紧检测有护栏不误杀真阳性
+- 说明见 [`test/README.md`](test/README.md)
 
 ### V1.6.1 — 2026-07-13
 - 修复：图标文件实际为 JPEG 伪装 PNG，导致 Chrome 清单校验失败

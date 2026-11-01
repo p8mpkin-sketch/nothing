@@ -102,26 +102,34 @@ export function parseReflectionContext(snippet, paramValue) {
   // ── 框架检测 ──
   ctx.framework = detectFramework(snippet);
 
-  // React/Vue/Angular 自动 HTML 转义的上下文不可利用（除非 v-html / dangerouslySetInnerHTML）
-  if (detectFrameworkAutoEscape(snippet, ctx.framework)) {
-    ctx.autoEscaped = true;
-    ctx.exploitability = 0;
-    return ctx;
-  }
-
   // ── 上下文分类 ──
   if (snippetType === 'html_reflection') {
     classifyHtmlContext(ctx, before, after);
   } else if (snippetType === 'script' || snippetType === 'probe') {
-    classifyScriptContext(ctx, before, after, snippet, paramValue);
+    classifyScriptContext(ctx, before, after);
   } else if (snippetType === 'sink') {
     classifySinkContext(ctx, fullSnippet);
   } else {
     classifyHtmlContext(ctx, before, after);
   }
 
+  // ── 框架自动转义抑制(收窄) ──
+  // 只对框架真正会 HTML 转义的文本插值上下文(HTML_BODY)抑制。JS 字符串 / 模板 /
+  // DOM sink / 属性上下文的数据流绕过了框架的 JSX/模板转义(例如内联脚本里
+  // el.innerHTML = 参数),页面用没用框架都不该因此判为不可利用——旧逻辑对所有
+  // 上下文一律清零,是过度抑制、造成漏报。除非 v-html / dangerouslySetInnerHTML。
+  if (ctx.framework !== 'none' &&
+      ctx.contextType === CTX.HTML_BODY &&
+      detectFrameworkAutoEscape(snippet, ctx.framework)) {
+    ctx.autoEscaped = true;
+    ctx.exploitability = 0;
+    return ctx;
+  }
+
   // 计算可利用性评分
   ctx.exploitability = calcExploitability(ctx);
+  // 用实测弹窗率校准(样本不足时为 no-op,不改变当前行为)
+  ctx.exploitability = exploitabilityCalibrator.calibrate(ctx.contextType, ctx.exploitability);
 
   return ctx;
 }
@@ -241,112 +249,130 @@ function classifyHtmlContext(ctx, before, after) {
 /**
  * 分类脚本上下文（内联 <script> 中的反射）
  */
-function classifyScriptContext(ctx, before, after, snippet) {
-  const val = ctx.paramValue;
-  const bTrim = before.trim();
-  const aTrim = after.trim();
-  const last20 = before.slice(-20);
+// ── JS 词法状态扫描器 ───────────────────────────────────────────────────────────
+// 从 before 开头逐字符走到反射点，维护"当前处于什么词法状态"的栈。相比旧的
+// lastIndexOf('"') 猜引号，它能正确处理:转义引号 \" (不算闭合)、已经闭合的前一个
+// 字符串、注释里的引号、http:// 里的 //、模板字面量与 ${} 嵌套。走到末尾时栈顶就是
+// 反射点的真实上下文。
+// 返回栈顶 { t } :'code' | 'line_comment' | 'block_comment' | 'sq' | 'dq' | 'tpl' | 'tpl_expr'
+function scanJsState(s) {
+  const stack = [{ t: 'code' }];
+  const top = () => stack[stack.length - 1];
 
-  // 检查是否在注释中 —— 排除 URL 模式 (http:// https://)
-  // 且确认不是字符串字面量内的 //
-  const before40 = before.slice(-40);
-  if (/\s\/\/[^\n]*$/.test(before40)) {
-    // 空格 + // → 是真正的单行注释（不是 http://）
-    if (!/https?:\/\/[^\n]*$/.test(before)) {
-      ctx.contextType = CTX.JS_COMMENT;
-      return;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    const n = s[i + 1];
+    const cur = top().t;
+
+    if (cur === 'line_comment') {
+      if (c === '\n') stack.pop();
+      continue;
+    }
+    if (cur === 'block_comment') {
+      if (c === '*' && n === '/') { stack.pop(); i++; }
+      continue;
+    }
+    if (cur === 'sq' || cur === 'dq') {
+      if (c === '\\') { i++; continue; }            // 转义:跳过下一个字符
+      if (c === (cur === 'sq' ? "'" : '"')) stack.pop();
+      continue;
+    }
+    if (cur === 'tpl') {
+      if (c === '\\') { i++; continue; }
+      if (c === '`') stack.pop();
+      else if (c === '$' && n === '{') { stack.push({ t: 'tpl_expr', brace: 0 }); i++; }
+      continue;
+    }
+
+    // cur === 'code' 或 'tpl_expr'
+    if (c === '/' && n === '/') { stack.push({ t: 'line_comment' }); i++; continue; }
+    if (c === '/' && n === '*') { stack.push({ t: 'block_comment' }); i++; continue; }
+    if (c === "'") { stack.push({ t: 'sq' }); continue; }
+    if (c === '"') { stack.push({ t: 'dq' }); continue; }
+    if (c === '`') { stack.push({ t: 'tpl' }); continue; }
+    if (cur === 'tpl_expr') {
+      if (c === '{') top().brace++;
+      else if (c === '}') {
+        if (top().brace === 0) stack.pop();          // 关闭 ${...}
+        else top().brace--;
+      }
     }
   }
-  // 多行注释：/* ... */  排除正则字符串里匹配到的 /*
-  if (/\/\*[^*]*$/.test(before) && !/\s*\/\//.test(last20)) {
+  return top();
+}
+
+// 在 s 中找第一个未被转义的引号 q，返回下标;找不到返回 -1。
+function findUnescapedQuote(s, q) {
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\') { i++; continue; }
+    if (s[i] === q) return i;
+  }
+  return -1;
+}
+
+function classifyScriptContext(ctx, before, after) {
+  const st = scanJsState(before);
+
+  // 注释:状态机已正确区分 http:// 和字符串内的 //，无需再手工排除
+  if (st.t === 'line_comment' || st.t === 'block_comment') {
     ctx.contextType = CTX.JS_COMMENT;
     return;
   }
-  // HTML 注释 <!-- -->
+  // HTML 注释 <!-- --> (内联 script 里偶发，状态机不处理 HTML 注释)
   if (/<!--[^>]*$/.test(before) && after.includes('-->')) {
     ctx.contextType = CTX.JS_COMMENT;
     return;
   }
 
-  // 检查模板字面量 $\{...\} 表达式内
-  if (/\$\{/.test(last20) && aTrim.startsWith('}')) {
+  // 模板字面量 ${...} 表达式内
+  if (st.t === 'tpl_expr') {
     ctx.contextType = CTX.JS_TEMPLATE_EXPR;
     return;
   }
 
-  // 检查模板字面量 `...` 中
-  const backtickMatch = before.match(/`([^`]*)$/);
-  if (backtickMatch && !backtickMatch[1].includes('$')) {
+  // 模板字面量体 `...`
+  if (st.t === 'tpl') {
     ctx.contextType = CTX.JS_TEMPLATE;
     ctx.quoteType = '`';
     return;
   }
 
-  // 检查 JSON 键位置（"key":）
-  // 严格条件：值前是 " 或 '，值后紧跟 : 且前面有 { 或 , 的结构证据
-  if (/["']$/.test(last20) && (aTrim.startsWith(':') || /^:\s*/.test(aTrim))) {
-    // 确认是真正的 JSON key：附近必须有 { 或 , 且在 key 位置
-    const nearBefore = before.slice(-80);
-    const isJsonStructure = /[{,]\s*["']$/.test(nearBefore) || /\{[^}]*["']$/.test(nearBefore.slice(-40));
-    if (isJsonStructure) {
-      ctx.contextType = CTX.JS_OBJECT_KEY;
-      return;
-    }
-  }
+  // 引号字符串内（dq / sq）
+  if (st.t === 'dq' || st.t === 'sq') {
+    const quote = st.t === 'dq' ? '"' : "'";
+    ctx.quoteType = quote;
 
-  // 检查引号上下文 — 找出值周围的开闭引号
-  const doubleQ = before.lastIndexOf('"');
-  const singleQ = before.lastIndexOf("'");
-  const openQuote = before.lastIndexOf('"') > before.lastIndexOf("'") ? '"' : "'";
-  const openIdx = before.lastIndexOf(openQuote);
-
-  if (openIdx !== -1) {
-    // 前面有开引号
-    const afterValue = after;
-    const closeIdx = afterValue.indexOf(openQuote);
+    // 闭合引号:after 中第一个未转义的同类引号
+    const closeIdx = findUnescapedQuote(after, quote);
     const distance = closeIdx === -1 ? 999 : closeIdx;
+    const openIdx = before.lastIndexOf(quote);
 
-    ctx.quoteType = openQuote;
-    ctx.charsBefore = before.length - openIdx - 1;
-    ctx.charsAfter = distance === 999 ? 999 : distance;
-
+    ctx.charsBefore = openIdx === -1 ? 0 : before.length - openIdx - 1;
+    ctx.charsAfter = distance;
     ctx.valueIsWholeString = ctx.charsBefore === 0 && distance === 0;
 
-    if (distance <= 3) {
-      // 值后面很快就闭合
-      if (ctx.charsBefore <= 3) {
-        // 值两边紧贴引号或只差一点 → 最可靠的注入点
+    // 闭合引号之后紧跟的内容
+    if (distance !== 999) {
+      const afterClose = after.slice(distance + 1).replace(/^\s*/, '');
+      // JSON 键位置("key": )：闭合后是 : 且前面是 { 或 , 结构 → 键，不可利用
+      if (afterClose.startsWith(':') && /[{,]\s*["']?[\w$]*$/.test(before.slice(-80))) {
+        ctx.contextType = CTX.JS_OBJECT_KEY;
+        return;
       }
-
-      // 检查后面跟的内容
-      const afterClose = afterValue.substring(distance);
-      const trimmedAfter = afterClose.replace(/^\s*/, '');
-      // 如果闭合引号后是 , 或 } → 在对象/数组里
-      if (trimmedAfter.startsWith(',') || trimmedAfter.startsWith('}') ||
-          trimmedAfter.startsWith(']') || /^\s*\)/.test(trimmedAfter)) {
-        ctx.inObject = true;
-      }
+      // 对象/数组/调用上下文:闭合后是 , } ] ) → 需要对象闭合式 POC
+      if (/^[,}\])]/.test(afterClose)) ctx.inObject = true;
     }
 
-    // 检查前面有没有对象开括号
-    const beforeOpen = last20.substring(0, last20.length - 1);
-    const braceBefore = beforeOpen.lastIndexOf('{');
-    const commaBefore = beforeOpen.lastIndexOf(',');
-    if (braceBefore > commaBefore && braceBefore > last20.indexOf('{', Math.max(0, last20.length - 30))) {
-      // 前面是 { 或 , 而且包含 key: 模式
-      // 检查 ": 之前有没有 key 名
-      const preQuote = before.substring(Math.max(0, openIdx - 30), openIdx);
-      if (/["']\s*:\s*$/.test(preQuote) || /:\s*$/.test(preQuote)) {
-        ctx.inObject = true;
-      }
-    }
+    // 前面是 key: 或 { , 开头 → 在对象里
+    const preOpen = before.slice(Math.max(0, openIdx - 30), openIdx);
+    if (/["']\s*:\s*$/.test(preOpen) || /[:,{]\s*$/.test(preOpen)) ctx.inObject = true;
 
-    ctx.contextType = CTX.JS_STRING_DQ;
-    if (openQuote === "'") ctx.contextType = CTX.JS_STRING_SQ;
-  } else {
-    // 没有开引号，值可能是不带引号的表达式（数字、布尔、变量引用）
-    ctx.contextType = CTX.JS_EXPRESSION;
+    ctx.contextType = quote === '"' ? CTX.JS_STRING_DQ : CTX.JS_STRING_SQ;
+    return;
   }
+
+  // 代码上下文(无引号):数字 / 布尔 / 变量引用 → 表达式，通常不可直接利用
+  ctx.contextType = CTX.JS_EXPRESSION;
 }
 
 /**
@@ -423,6 +449,65 @@ function calcExploitability(ctx) {
       return 0;
   }
 }
+
+// ── 可利用性打分校准器(闭环) ───────────────────────────────────────────────────
+// calcExploitability 是静态查表。pocVerifier 实测了哪些 POC 真弹窗——这是 ground
+// truth。本校准器按"上下文类型"累计实测弹窗率,反过来微调该上下文的打分,让引擎越
+// 用越准。与 WafStrategyManager 同构:持久化到 chrome.storage,SW 重启保留。
+//
+// 安全性:设最小样本门槛 CALIB_MIN_SAMPLES,样本不足时 calibrate() 原样返回
+// (严格 no-op,不改变当前行为);且漂移上限 ±0.2、夹在 [0,1],避免单点数据带偏。
+const CALIB_MIN_SAMPLES = 8;
+const CALIB_WEIGHT = 0.3;   // 实测率权重(base 占 0.7)
+const CALIB_MAX_DRIFT = 0.2;
+
+export class ExploitabilityCalibrator {
+  constructor() {
+    this.stats = {};          // contextType -> { pop, total }
+    this._dirty = false;
+    this._saveTimer = null;
+  }
+
+  recordResult(contextType, didPop) {
+    if (!contextType) return;
+    const s = this.stats[contextType] || (this.stats[contextType] = { pop: 0, total: 0 });
+    s.total += 1;
+    if (didPop) s.pop += 1;
+    this._dirty = true;
+    this._debounceSave();
+  }
+
+  calibrate(contextType, baseScore) {
+    const s = this.stats[contextType];
+    if (!s || s.total < CALIB_MIN_SAMPLES) return baseScore; // 样本不足 → 不动
+    const rate = s.pop / s.total;
+    const blended = baseScore * (1 - CALIB_WEIGHT) + rate * CALIB_WEIGHT;
+    const bounded = Math.max(baseScore - CALIB_MAX_DRIFT, Math.min(baseScore + CALIB_MAX_DRIFT, blended));
+    return Math.max(0, Math.min(1, bounded));
+  }
+
+  serialize() { return JSON.parse(JSON.stringify(this.stats)); }
+  deserialize(data) { if (data && typeof data === 'object') this.stats = data; }
+
+  async save() {
+    this._dirty = false;
+    try { await chrome.storage.local.set({ exploitCalibStats: this.stats }); } catch {}
+  }
+
+  async load() {
+    try {
+      const data = await new Promise(r => chrome.storage.local.get('exploitCalibStats', r));
+      if (data?.exploitCalibStats) this.deserialize(data.exploitCalibStats);
+    } catch {}
+  }
+
+  _debounceSave() {
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => this.save(), 2000);
+  }
+}
+
+export const exploitabilityCalibrator = new ExploitabilityCalibrator();
 
 // ── WAF 绕过策略注册表 ──────────────────────────────────────────────────────────
 
