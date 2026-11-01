@@ -33,6 +33,49 @@ describe('runPipeline — 端到端误报治理', () => {
   })
 })
 
+describe('runPipeline — DOM XSS 变量 taint(⑧)', () => {
+  const NOVERIFY = { pocVerify: false }
+
+  it('远距离变量流(source→变量→>200字符后 sink)现在能检出', async () => {
+    const gap = ';'.padEnd(260, 'z') + ';'
+    const scanData = {
+      pageParamSample: ['PARAM: q=NOREFLECTVAL'],
+      inlineScriptSinkSnippet: [
+        `INLINE_SCRIPT_SINK_SNIPPET: var u = new URLSearchParams(location.search).get('q')${gap} el.innerHTML = u;`,
+      ],
+    }
+    const res = await runPipeline(scanData, URL, NOVERIFY)
+    const dom = res.vulnerabilities.find(v => v.type === 'DOM XSS')
+    expect(dom).toBeTruthy()
+    expect(dom.confidence).toBe(0.8) // taint 确认 → 更高置信度
+  })
+
+  it('邻近 source/sink(无变量链接)仍检出(不回归旧判据)', async () => {
+    const scanData = {
+      pageParamSample: ['PARAM: msg=NOREFLECTVAL'],
+      inlineScriptSinkSnippet: [
+        `INLINE_SCRIPT_SINK_SNIPPET: if(location.hash){ } el.innerHTML = renderTemplate();`,
+      ],
+    }
+    const res = await runPipeline(scanData, URL, NOVERIFY)
+    const dom = res.vulnerabilities.find(v => v.type === 'DOM XSS')
+    expect(dom).toBeTruthy()
+    expect(dom.confidence).toBe(0.75) // 邻近兜底
+  })
+
+  it('远距离且无变量链接 → 不报(避免碰巧同段的误报)', async () => {
+    const gap = ';'.padEnd(300, 'x') + ';'
+    const scanData = {
+      pageParamSample: ['PARAM: q=NOREFLECTVAL'],
+      inlineScriptSinkSnippet: [
+        `INLINE_SCRIPT_SINK_SNIPPET: if(location.hash){log()}${gap} el.innerHTML = template;`,
+      ],
+    }
+    const res = await runPipeline(scanData, URL, NOVERIFY)
+    expect(res.vulnerabilities.find(v => v.type === 'DOM XSS')).toBeFalsy()
+  })
+})
+
 describe('runPipeline — 真实反射产出漏洞', () => {
   it('JS 双引号字符串反射 → 产出带 POC 的漏洞条目', async () => {
     const scanData = {

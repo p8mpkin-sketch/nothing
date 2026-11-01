@@ -370,9 +370,15 @@ function detectDomXssFromSinks(scanData, pageUrl, paramNames) {
     }
     if (!foundSink) continue;
 
-    // 收紧：source 和 sink 必须在合理距离内（200 字符以内），
-    // 否则它们只是碰巧在同一段代码里，不构成实际数据流
-    if (Math.abs(sinkIdx - sourceIdx) > 200) continue;
+    // 数据流判定(⑧ 轻量变量 taint):
+    //  - 变量 taint:var x = <source> … 之后 sink 用到 x —— 任意距离都算真实数据流,
+    //    修复 source/sink 相距 >200 字符时的远距离漏报
+    //  - 退化到邻近:taint 无法链接时,保留"source/sink 200 字符内"的旧判据(不回归)
+    const taint = traceDomTaint(body, sources, sinks);
+    const proximate = Math.abs(sinkIdx - sourceIdx) <= 200;
+    if (!taint && !proximate) continue;
+    if (taint) { foundSource = taint.source; foundSink = taint.sink; }
+    const confidence = taint ? 0.8 : 0.75;
     let paramName = '';
     // 优先从 snippet 里提取：get('name'), get("name"), get(`name`)
     const getMatch = body.match(/\.get\(['"`]([^'"`]+)['"`]\)/i);
@@ -416,10 +422,14 @@ function detectDomXssFromSinks(scanData, pageUrl, paramNames) {
       analysis += '\n\n数据流：URL 参数 → JavaScript 变量 → eval/Function 执行，可直接执行任意代码。';
     }
 
+    if (taint?.via === 'variable') {
+      analysis += '\n\n(经变量传播追踪确认:source 流入变量后被 sink 使用,非仅位置相邻。)';
+    }
+
     const vuln = {
       type: 'DOM XSS',
       severity: 'high',
-      confidence: 0.75,
+      confidence,
       source: `DOM source: ${foundSource}`,
       sink: isHtmlSink ? 'innerHTML' : 'eval',
       chain: `${foundSource} → ${isHtmlSink ? 'innerHTML' : 'eval/setTimeout'}`,
@@ -440,6 +450,46 @@ function detectDomXssFromSinks(scanData, pageUrl, paramNames) {
     result.summary = '发现 DOM XSS 漏洞';
   }
   return result;
+}
+
+/**
+ * 轻量变量 taint:判断 source 是否经变量传播(或直接)流入某个 sink。
+ * 不是完整数据流分析,只做保守的字符串级追踪——宁可漏判也不乱报:
+ *  1. 收集被 source 污染的变量:`x = ...<source>...`;并做至多 3 轮传播
+ *     (`y = ...x...` 则 y 也污染)
+ *  2. 若某 sink 之后的一小段里出现 source(直接流)或污染变量(变量流),即判为真实流
+ * @returns {{source:string, sink:string, via:'direct'|'variable'}|null}
+ */
+function traceDomTaint(body, sourceRes, sinkRes) {
+  const tainted = new Set();
+  // 赋值:ident = rhs(排除 ==/===/=> ,到 ; 或换行为止)
+  const assignRe = /\b(?:var\s+|let\s+|const\s+)?([A-Za-z_$][\w$]*)\s*=(?![=>])\s*([^;\n]+)/g;
+  for (let pass = 0; pass < 3; pass++) {
+    assignRe.lastIndex = 0;
+    const before = tainted.size;
+    let m;
+    while ((m = assignRe.exec(body)) !== null) {
+      const lhs = m[1], rhs = m[2];
+      const rhsHasSource = sourceRes.some(r => r.test(rhs));
+      const rhsHasTainted = [...tainted].some(t => new RegExp(`\\b${t}\\b`).test(rhs));
+      if (rhsHasSource || rhsHasTainted) tainted.add(lhs);
+    }
+    if (tainted.size === before) break; // 不再增长即收敛
+  }
+
+  for (const sk of sinkRes) {
+    const skm = body.match(sk);
+    if (!skm) continue;
+    const after = body.slice(skm.index, skm.index + 160); // sink 之后一小段
+    const hasSource = sourceRes.some(r => r.test(after));
+    const hasTainted = [...tainted].some(t => new RegExp(`\\b${t}\\b`).test(after));
+    if (hasSource || hasTainted) {
+      let src = 'DOM source';
+      for (const r of sourceRes) { const sm = body.match(r); if (sm) { src = sm[0]; break; } }
+      return { source: src, sink: skm[0], via: (hasTainted && !hasSource) ? 'variable' : 'direct' };
+    }
+  }
+  return null;
 }
 
 /** 简单版构建 POC URL */

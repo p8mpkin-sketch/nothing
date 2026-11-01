@@ -6,7 +6,7 @@ Nothing 是一个 Chrome 浏览器扩展（Manifest V3），浏览网页时自�
 
 AI 和规则引擎是两条主线：AI 负责过滤误报和研判漏洞上下文（支持 OpenAI / Anthropic / DeepSeek / 智谱 GLM，AI 不可用时切回静态检测），规则引擎负责主动发包探测 + 指纹命中告警（支持粘贴 xray/afrog 风格 CEL 表达式一键导入）。
 
-[![Version](https://img.shields.io/badge/version-1.7.4-blue)](https://github.com/p8mpkin-sketch/nothing)
+[![Version](https://img.shields.io/badge/version-1.7.5-blue)](https://github.com/p8mpkin-sketch/nothing)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](https://developer.chrome.com/docs/extensions/mv3/)
 [![License](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
@@ -142,6 +142,12 @@ nothing-plugin/
 ---
 
 ## 版本更新
+
+### V1.7.5 — 2026-11-02
+引擎算法优化(⑧):DOM XSS 轻量变量 taint
+- `detectDomXssFromSinks` 不再只靠"source/sink 200 字符邻近"判数据流。新增 `traceDomTaint`:收集被 DOM source 污染的变量(`var x = ...location.search...`)并做至多 3 轮传播,若某 sink 用到污染变量(或直接用 source)即判为真实数据流 —— **任意距离**都能命中,修复远距离漏报
+- 保守不回归:taint 无法链接时仍退化到原 200 字符邻近判据;taint 确认的流置信度 0.8(高于邻近的 0.75)
+- 回归测试增至 81 条,新增 DOM taint 三例(远距离变量流新检出 / 邻近不回归 / 远距无链接不报)
 
 ### V1.7.4 — 2026-11-02
 引擎算法优化(⑤):可利用性打分闭环校准
