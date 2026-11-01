@@ -18,7 +18,7 @@
  *   两者都使用 pocEngine 做 POC 生成，确保一致性。
  */
 
-import { parseReflectionContext, generatePocs, extractParamNames, extractParamValue, wafStrategy, CTX, ENC } from './pocEngine';
+import { parseReflectionContext, generatePocs, extractParamNames, extractParamValue, wafStrategy, exploitabilityCalibrator, CTX, ENC } from './pocEngine';
 import { verifyXssFindings } from './pocVerifier';
 
 // ── 入口 ────────────────────────────────────────────────────────────────────────
@@ -158,6 +158,15 @@ export async function runPipeline(scanData, pageUrl, settings, aiCall = null) {
         }
       }
     }
+
+    // 实测结果回流打分校准器:弹窗=该上下文一次正样本,误报=负样本
+    // (WAF 拦截态度未定,不计入)
+    for (const v of result.vulnerabilities) {
+      if (v.verified) exploitabilityCalibrator.recordResult(v._contextType, true);
+    }
+    for (const fp of falsePositives) {
+      exploitabilityCalibrator.recordResult(fp._contextType, false);
+    }
   }
 
   // ── 生成摘要 ────────────────────────────────────────────────────────────────
@@ -241,6 +250,7 @@ function buildVulnEntry(cand, pocs) {
     verified: false,
     verifiedPocs: [],
     _pocMeta: pocMeta,
+    _contextType: context.contextType, // 供打分校准器按上下文归类实测结果
   };
 }
 

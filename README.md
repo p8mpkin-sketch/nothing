@@ -6,7 +6,7 @@ Nothing 是一个 Chrome 浏览器扩展（Manifest V3），浏览网页时自�
 
 AI 和规则引擎是两条主线：AI 负责过滤误报和研判漏洞上下文（支持 OpenAI / Anthropic / DeepSeek / 智谱 GLM，AI 不可用时切回静态检测），规则引擎负责主动发包探测 + 指纹命中告警（支持粘贴 xray/afrog 风格 CEL 表达式一键导入）。
 
-[![Version](https://img.shields.io/badge/version-1.7.3-blue)](https://github.com/p8mpkin-sketch/nothing)
+[![Version](https://img.shields.io/badge/version-1.7.4-blue)](https://github.com/p8mpkin-sketch/nothing)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](https://developer.chrome.com/docs/extensions/mv3/)
 [![License](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
@@ -142,6 +142,13 @@ nothing-plugin/
 ---
 
 ## 版本更新
+
+### V1.7.4 — 2026-11-02
+引擎算法优化(⑤):可利用性打分闭环校准
+- 新增 `ExploitabilityCalibrator`(与 `WafStrategyManager` 同构):按"上下文类型"累计 pocVerifier 实测弹窗率,反过来微调 `calcExploitability` 的打分,让引擎越用越准
+- **安全**:最小样本门槛 8,样本不足时 `calibrate()` 严格 no-op(不改变当前行为);漂移上限 ±0.2、夹在 [0,1],避免单点数据带偏;持久化到 `chrome.storage.local`,`onInstalled` 载回
+- 闭环接线:Phase 5 把 verified(正样本)/ falsePositive(负样本)按 `_contextType` 回流校准器;vuln 条目新增 `_contextType` 供归类
+- 回归测试增至 78 条,新增 `calibrator.test.js`(门槛 no-op / 升降调 / 漂移夹紧 / 上下文隔离 / 序列化往返)
 
 ### V1.7.3 — 2026-11-02
 引擎算法优化(②):框架转义抑制收窄,减少漏报

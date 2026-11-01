@@ -7,7 +7,7 @@ import { queryICP, queryIPInfo, isInternalHost } from './siteAnalysis';
 import { staticXssDetector } from './staticXssDetector';
 import { verifyXssFindings } from './pocVerifier';
 import { getProvider, resolveAiUrl } from '../utils/aiProviders';
-import { generatePocs, parseReflectionContext, extractParamNames, extractParamValue, wafStrategy, CTX, ENC } from './pocEngine';
+import { generatePocs, parseReflectionContext, extractParamNames, extractParamValue, wafStrategy, exploitabilityCalibrator, CTX, ENC } from './pocEngine';
 import { runPipeline } from './detectionPipeline';
 import { withProbeHeaders } from './probeMarker';
 
@@ -1872,6 +1872,8 @@ chrome.runtime.onInstalled.addListener(() => {
     setupOffscreenDocument('src/offscreen/offscreen.html');
     // Load WAF strategy scores from storage
     wafStrategy.load();
+    // Load exploitability calibration stats from storage
+    exploitabilityCalibrator.load();
     // Set default N icon for all tabs
     chrome.tabs.query({}, (tabs) => {
         tabs.forEach(tab => { if (tab.id) setNIcon(tab.id, 0); });

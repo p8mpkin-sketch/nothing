@@ -128,6 +128,8 @@ export function parseReflectionContext(snippet, paramValue) {
 
   // 计算可利用性评分
   ctx.exploitability = calcExploitability(ctx);
+  // 用实测弹窗率校准(样本不足时为 no-op,不改变当前行为)
+  ctx.exploitability = exploitabilityCalibrator.calibrate(ctx.contextType, ctx.exploitability);
 
   return ctx;
 }
@@ -447,6 +449,65 @@ function calcExploitability(ctx) {
       return 0;
   }
 }
+
+// ── 可利用性打分校准器(闭环) ───────────────────────────────────────────────────
+// calcExploitability 是静态查表。pocVerifier 实测了哪些 POC 真弹窗——这是 ground
+// truth。本校准器按"上下文类型"累计实测弹窗率,反过来微调该上下文的打分,让引擎越
+// 用越准。与 WafStrategyManager 同构:持久化到 chrome.storage,SW 重启保留。
+//
+// 安全性:设最小样本门槛 CALIB_MIN_SAMPLES,样本不足时 calibrate() 原样返回
+// (严格 no-op,不改变当前行为);且漂移上限 ±0.2、夹在 [0,1],避免单点数据带偏。
+const CALIB_MIN_SAMPLES = 8;
+const CALIB_WEIGHT = 0.3;   // 实测率权重(base 占 0.7)
+const CALIB_MAX_DRIFT = 0.2;
+
+export class ExploitabilityCalibrator {
+  constructor() {
+    this.stats = {};          // contextType -> { pop, total }
+    this._dirty = false;
+    this._saveTimer = null;
+  }
+
+  recordResult(contextType, didPop) {
+    if (!contextType) return;
+    const s = this.stats[contextType] || (this.stats[contextType] = { pop: 0, total: 0 });
+    s.total += 1;
+    if (didPop) s.pop += 1;
+    this._dirty = true;
+    this._debounceSave();
+  }
+
+  calibrate(contextType, baseScore) {
+    const s = this.stats[contextType];
+    if (!s || s.total < CALIB_MIN_SAMPLES) return baseScore; // 样本不足 → 不动
+    const rate = s.pop / s.total;
+    const blended = baseScore * (1 - CALIB_WEIGHT) + rate * CALIB_WEIGHT;
+    const bounded = Math.max(baseScore - CALIB_MAX_DRIFT, Math.min(baseScore + CALIB_MAX_DRIFT, blended));
+    return Math.max(0, Math.min(1, bounded));
+  }
+
+  serialize() { return JSON.parse(JSON.stringify(this.stats)); }
+  deserialize(data) { if (data && typeof data === 'object') this.stats = data; }
+
+  async save() {
+    this._dirty = false;
+    try { await chrome.storage.local.set({ exploitCalibStats: this.stats }); } catch {}
+  }
+
+  async load() {
+    try {
+      const data = await new Promise(r => chrome.storage.local.get('exploitCalibStats', r));
+      if (data?.exploitCalibStats) this.deserialize(data.exploitCalibStats);
+    } catch {}
+  }
+
+  _debounceSave() {
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => this.save(), 2000);
+  }
+}
+
+export const exploitabilityCalibrator = new ExploitabilityCalibrator();
 
 // ── WAF 绕过策略注册表 ──────────────────────────────────────────────────────────
 
