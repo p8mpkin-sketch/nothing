@@ -6,7 +6,7 @@ Nothing 是一个 Chrome 浏览器扩展（Manifest V3），浏览网页时自�
 
 AI 和规则引擎是两条主线：AI 负责过滤误报和研判漏洞上下文（支持 OpenAI / Anthropic / DeepSeek / 智谱 GLM，AI 不可用时切回静态检测），规则引擎负责主动发包探测 + 指纹命中告警（支持粘贴 xray/afrog 风格 CEL 表达式一键导入）。
 
-[![Version](https://img.shields.io/badge/version-1.7.0-blue)](https://github.com/p8mpkin-sketch/nothing)
+[![Version](https://img.shields.io/badge/version-1.7.1-blue)](https://github.com/p8mpkin-sketch/nothing)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](https://developer.chrome.com/docs/extensions/mv3/)
 [![License](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
@@ -142,6 +142,12 @@ nothing-plugin/
 ---
 
 ## 版本更新
+
+### V1.7.1 — 2026-11-02
+引擎算法优化(④):密钥检测香农熵下限
+- `isRealSecret` 新增香农熵判定:`hasEntropy`(含数字/符号)之外再加熵下限 2.5 bits/char,拦掉高度重复/低多样性的垃圾值(`aaaaaa`、`121212`、`------`),真密钥熵普遍 >3 不受影响
+- `scanner.filter.js` 导出 `shannonEntropy` 供复用与测试
+- 回归测试增至 59 条,新增 `scannerFilter.test.js`(经 window stub 测内容脚本,不改 IIFE 形态)
 
 ### V1.7.0 — 2026-11-02
 引擎算法优化(第一批):XSS 上下文精度 + 规则引擎性能

@@ -1,5 +1,23 @@
 // Scanner filter functions - exposed as window.SCANNER_FILTER
+
+// 香农熵(bits/char):衡量字符串的随机性。真密钥/令牌熵高(hex≈4、base64≈5-6),
+// 高度重复或低多样性的串(aaaaaa、121212、------)熵极低,几乎不可能是真密钥。
+function _shannonEntropy(str) {
+    if (!str) return 0;
+    const freq = Object.create(null);
+    for (const ch of str) freq[ch] = (freq[ch] || 0) + 1;
+    const len = str.length;
+    let h = 0;
+    for (const k in freq) {
+        const p = freq[k] / len;
+        h -= p * Math.log2(p);
+    }
+    return h;
+}
+
 window.SCANNER_FILTER = {
+    shannonEntropy: _shannonEntropy,
+
     // IP whitelist - skip private/loopback ranges
     isPrivateIP(ip) {
         const parts = ip.split('.').map(Number);
@@ -103,6 +121,9 @@ window.SCANNER_FILTER = {
         // 必须包含至少一个数字或特殊字符，纯字母可读词组不算密钥
         const hasEntropy = /[0-9!@#$%^&*\-_+=\/\\]/.test(val);
         if (!hasEntropy) return false;
+        // 香农熵下限:高度重复/低多样性的串(aaaaaaaa、121212、000000、------)
+        // 熵极低,真密钥熵普遍 >3,阈值 2.5 既拦垃圾又不误杀真密钥。
+        if (_shannonEntropy(val) < 2.5) return false;
         return true;
     },
 };
