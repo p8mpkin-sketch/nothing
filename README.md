@@ -6,7 +6,7 @@ Nothing 是一个 Chrome 浏览器扩展（Manifest V3），浏览网页时自�
 
 AI 和规则引擎是两条主线：AI 负责过滤误报和研判漏洞上下文（支持 OpenAI / Anthropic / DeepSeek / 智谱 GLM，AI 不可用时切回静态检测），规则引擎负责主动发包探测 + 指纹命中告警（支持粘贴 xray/afrog 风格 CEL 表达式一键导入）。
 
-[![Version](https://img.shields.io/badge/version-1.7.1-blue)](https://github.com/p8mpkin-sketch/nothing)
+[![Version](https://img.shields.io/badge/version-1.7.2-blue)](https://github.com/p8mpkin-sketch/nothing)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](https://developer.chrome.com/docs/extensions/mv3/)
 [![License](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
@@ -142,6 +142,12 @@ nothing-plugin/
 ---
 
 ## 版本更新
+
+### V1.7.2 — 2026-11-02
+引擎算法优化(⑥核心 / ⑦核实)
+- **favicon 哈希工具**(⑥ 核心):新增 `src/utils/faviconHash.js`,实现 MurmurHash3 x86_32 + fofa/shodan 风格 favicon 哈希(base64 折行 + 有符号 32 位输出)。mmh3 已对公开向量逐一校验(`("",1)=0x514e28b7` 等)。抓取 favicon + 接入指纹结果与 UI 展示为后续集成步骤(需真实扩展验证)
+- **ReDoS 核实**(⑦):实测 `scanner.config.js` 的 api/url 正则在 60–90K 病态输入下均 ≤1ms —— `.`/引号为确定分隔符,不具备指数回溯的重叠歧义,**无 ReDoS 风险**,不做改动(避免对精度工具的臆测性修改)
+- 回归测试增至 68 条,新增 `faviconHash.test.js`(mmh3 公开向量 + base64 折行 + 有符号输出)
 
 ### V1.7.1 — 2026-11-02
 引擎算法优化(④):密钥检测香农熵下限
