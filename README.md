@@ -6,7 +6,7 @@ Nothing 是一个 Chrome 浏览器扩展（Manifest V3），浏览网页时自�
 
 AI 和规则引擎是两条主线：AI 负责过滤误报和研判漏洞上下文（支持 OpenAI / Anthropic / DeepSeek / 智谱 GLM，AI 不可用时切回静态检测），规则引擎负责主动发包探测 + 指纹命中告警（支持粘贴 xray/afrog 风格 CEL 表达式一键导入）。
 
-[![Version](https://img.shields.io/badge/version-1.6.0-blue)](https://github.com/p8mpkin-sketch/nothing)
+[![Version](https://img.shields.io/badge/version-1.6.2-blue)](https://github.com/p8mpkin-sketch/nothing)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](https://developer.chrome.com/docs/extensions/mv3/)
 [![License](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
@@ -142,6 +142,13 @@ nothing-plugin/
 ---
 
 ## 版本更新
+
+### V1.6.2 — 2026-11-01
+开发基建:引入测试回归护栏(无运行时变更)
+- 接入 vitest:`npm test` 一键跑,`npm run test:watch` 监听
+- 覆盖 5 个纯逻辑模块(urlParser / matchHelper / pocEngine / staticXssDetector / detectionPipeline)共 38 条用例
+- 误报语料:`staticXssDetector.test.js` 建立 `notXss`/`isXss` 数据驱动语料,约定"每修一个误报加一条",后续收紧检测有护栏不误杀真阳性
+- 说明见 [`test/README.md`](test/README.md)
 
 ### V1.6.1 — 2026-07-13
 - 修复：图标文件实际为 JPEG 伪装 PNG，导致 Chrome 清单校验失败
