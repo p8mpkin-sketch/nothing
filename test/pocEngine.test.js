@@ -72,6 +72,41 @@ describe('parseReflectionContext — 上下文分类（特征）', () => {
   })
 })
 
+describe('parseReflectionContext — 词法状态机(引号归属,旧 lastIndexOf 判错的场景)', () => {
+  it('前一个字符串已闭合 → 代码位置是表达式,不是字符串', () => {
+    // 旧逻辑 lastIndexOf('"') 会命中 "x" 的引号,误判为仍在字符串内
+    const ctx = parseReflectionContext('INLINE_SCRIPT_SNIPPET var a = "x"; foo(markerABC)', 'markerABC')
+    expect(ctx.contextType).toBe(CTX.JS_EXPRESSION)
+  })
+
+  it('http:// 在字符串内不误判为注释', () => {
+    const ctx = parseReflectionContext('INLINE_SCRIPT_SNIPPET var u = "http://h.com/markerABC"', 'markerABC')
+    expect(ctx.contextType).toBe(CTX.JS_STRING_DQ)
+  })
+
+  it('转义引号 \\" 不算闭合 → 仍在双引号字符串内', () => {
+    const ctx = parseReflectionContext('INLINE_SCRIPT_SNIPPET var s = "he said \\"markerABC', 'markerABC')
+    expect(ctx.contextType).toBe(CTX.JS_STRING_DQ)
+  })
+
+  it('真正的行注释 → JS_COMMENT,不可利用', () => {
+    const ctx = parseReflectionContext('INLINE_SCRIPT_SNIPPET var x=1; // note markerABC', 'markerABC')
+    expect(ctx.contextType).toBe(CTX.JS_COMMENT)
+    expect(ctx.exploitability).toBe(0)
+  })
+
+  it('模板字面量 ${} 表达式内 → JS_TEMPLATE_EXPR', () => {
+    const ctx = parseReflectionContext('INLINE_SCRIPT_SNIPPET const t = `greet ${markerABC}`', 'markerABC')
+    expect(ctx.contextType).toBe(CTX.JS_TEMPLATE_EXPR)
+  })
+
+  it('模板体内(${expr} 已正确闭合)→ JS_TEMPLATE', () => {
+    const ctx = parseReflectionContext('INLINE_SCRIPT_SNIPPET const t = `a ${x} markerABC`', 'markerABC')
+    expect(ctx.contextType).toBe(CTX.JS_TEMPLATE)
+    expect(ctx.quoteType).toBe('`')
+  })
+})
+
 describe('generatePocs', () => {
   it('exploitability<=0 不生成 POC', () => {
     expect(generatePocs({ exploitability: 0, contextType: CTX.HTML_BODY }, 'https://x.com/', 'q')).toEqual([])

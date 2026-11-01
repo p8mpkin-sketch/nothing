@@ -6,7 +6,7 @@ Nothing 是一个 Chrome 浏览器扩展（Manifest V3），浏览网页时自�
 
 AI 和规则引擎是两条主线：AI 负责过滤误报和研判漏洞上下文（支持 OpenAI / Anthropic / DeepSeek / 智谱 GLM，AI 不可用时切回静态检测），规则引擎负责主动发包探测 + 指纹命中告警（支持粘贴 xray/afrog 风格 CEL 表达式一键导入）。
 
-[![Version](https://img.shields.io/badge/version-1.6.2-blue)](https://github.com/p8mpkin-sketch/nothing)
+[![Version](https://img.shields.io/badge/version-1.7.0-blue)](https://github.com/p8mpkin-sketch/nothing)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](https://developer.chrome.com/docs/extensions/mv3/)
 [![License](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
@@ -142,6 +142,12 @@ nothing-plugin/
 ---
 
 ## 版本更新
+
+### V1.7.0 — 2026-11-02
+引擎算法优化(第一批):XSS 上下文精度 + 规则引擎性能
+- **上下文引擎词法状态机**:`classifyScriptContext` 不再用 `lastIndexOf` 猜引号归属,改为从反射点前文逐字符扫描维护词法状态栈。正确处理转义引号 `\"`、已闭合的前一个字符串、注释内引号、`http://` 里的 `//`、模板字面量与 `${}` 嵌套 —— 直接减少 JS 字符串注入的误报与漏报
+- **规则引擎编译缓存**:`matchContent` 不再每次 `new RegExp()`,按 pattern 缓存编译结果(非法正则缓存 null);keyword 归一化按 content 单条 memo,同一响应循环规则时只算一次。编译/归一成本从 O(规则×请求) 降到 O(唯一 pattern)
+- 回归测试增至 47 条,新增状态机专项用例(已闭合字符串/http:/转义引号/模板嵌套)与缓存一致性用例
 
 ### V1.6.2 — 2026-11-01
 开发基建:引入测试回归护栏(无运行时变更)

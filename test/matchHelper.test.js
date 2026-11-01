@@ -40,4 +40,26 @@ describe('matchContent', () => {
     expect(matchContent(rule, 'has zzz', 500).isMatch).toBe(true)  // 内容命中
     expect(matchContent(rule, 'no-match', 500).isMatch).toBe(false)
   })
+
+  // 编译缓存:同一 pattern 多次调用结果一致;非法正则缓存后仍稳定不命中不抛
+  it('正则编译缓存:重复调用结果稳定', () => {
+    const rule = { matchType: 'regex', pattern: 'ab+c' }
+    expect(matchContent(rule, 'xabbbc').contentMatch).toBe(true)
+    expect(matchContent(rule, 'nope').contentMatch).toBe(false)
+    expect(matchContent(rule, 'abc').contentMatch).toBe(true)
+  })
+
+  it('非法正则缓存后多次调用都不命中且不抛', () => {
+    const rule = { matchType: 'regex', pattern: '(unclosed' }
+    expect(() => matchContent(rule, 'x')).not.toThrow()
+    expect(matchContent(rule, 'x').contentMatch).toBe(false)
+    expect(matchContent(rule, '(unclosed').contentMatch).toBe(false)
+  })
+
+  it('同内容不同规则的 keyword 归一结果一致(memo 不串味)', () => {
+    const content = 'The Quick  Brown   FOX'
+    expect(matchContent({ matchType: 'keyword', pattern: 'quick brown' }, content).contentMatch).toBe(true)
+    expect(matchContent({ matchType: 'keyword', pattern: 'lazy dog' }, content).contentMatch).toBe(false)
+    expect(matchContent({ matchType: 'keyword', pattern: 'fox' }, content).contentMatch).toBe(true)
+  })
 })
