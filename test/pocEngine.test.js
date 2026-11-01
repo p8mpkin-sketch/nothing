@@ -107,6 +107,31 @@ describe('parseReflectionContext — 词法状态机(引号归属,旧 lastIndexO
   })
 })
 
+describe('parseReflectionContext — 框架转义抑制收窄(减少漏报)', () => {
+  it('React 页面的 JS 字符串反射(内联脚本)不再被抑制', () => {
+    // 旧逻辑:页面有 React 字样 → 整体 exploitability=0 丢弃(漏报)
+    const ctx = parseReflectionContext('INLINE_SCRIPT_SNIPPET var app=React.render; el.innerHTML="markerABC"', 'markerABC')
+    expect(ctx.framework).toBe('react')
+    expect(ctx.contextType).toBe(CTX.JS_STRING_DQ)
+    expect(ctx.autoEscaped).toBeFalsy()
+    expect(ctx.exploitability).toBeGreaterThan(0)
+  })
+
+  it('React 页面的 HTML 文本反射仍被抑制(框架确实会转义文本插值)', () => {
+    const ctx = parseReflectionContext('HTML_REFLECTION (param: q): <div data-reactroot>markerABC</div>', 'markerABC')
+    expect(ctx.framework).toBe('react')
+    expect(ctx.autoEscaped).toBe(true)
+    expect(ctx.exploitability).toBe(0)
+  })
+
+  it('dangerouslySetInnerHTML 存在时即使 HTML 文本上下文也不抑制', () => {
+    const ctx = parseReflectionContext('HTML_REFLECTION (param: q): <div data-reactroot dangerouslySetInnerHTML>markerABC</div>', 'markerABC')
+    expect(ctx.framework).toBe('react')
+    expect(ctx.autoEscaped).toBeFalsy()
+    expect(ctx.exploitability).toBeGreaterThan(0)
+  })
+})
+
 describe('generatePocs', () => {
   it('exploitability<=0 不生成 POC', () => {
     expect(generatePocs({ exploitability: 0, contextType: CTX.HTML_BODY }, 'https://x.com/', 'q')).toEqual([])

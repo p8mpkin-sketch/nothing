@@ -6,7 +6,7 @@ Nothing 是一个 Chrome 浏览器扩展（Manifest V3），浏览网页时自�
 
 AI 和规则引擎是两条主线：AI 负责过滤误报和研判漏洞上下文（支持 OpenAI / Anthropic / DeepSeek / 智谱 GLM，AI 不可用时切回静态检测），规则引擎负责主动发包探测 + 指纹命中告警（支持粘贴 xray/afrog 风格 CEL 表达式一键导入）。
 
-[![Version](https://img.shields.io/badge/version-1.7.2-blue)](https://github.com/p8mpkin-sketch/nothing)
+[![Version](https://img.shields.io/badge/version-1.7.3-blue)](https://github.com/p8mpkin-sketch/nothing)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](https://developer.chrome.com/docs/extensions/mv3/)
 [![License](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
@@ -142,6 +142,12 @@ nothing-plugin/
 ---
 
 ## 版本更新
+
+### V1.7.3 — 2026-11-02
+引擎算法优化(②):框架转义抑制收窄,减少漏报
+- `parseReflectionContext` 把框架自动转义抑制挪到上下文分类之后,**只对 HTML 文本插值上下文(HTML_BODY)抑制**。旧逻辑只要页面出现 react/vue 字样就对所有上下文一律 `exploitability=0`,把内联脚本里 `el.innerHTML=参数` 这类 JS 字符串 / DOM sink / 模板 / 属性反射也误杀 —— 这些数据流绕过框架的 JSX/模板转义,不应被抑制
+- `dangerouslySetInnerHTML` / `v-html` 例外仍保留
+- 回归测试增至 71 条,新增框架收窄专项(React 页 JS 字符串反射不再抑制 / HTML 文本反射仍抑制 / dangerouslySetInnerHTML 例外)
 
 ### V1.7.2 — 2026-11-02
 引擎算法优化(⑥核心 / ⑦核实)

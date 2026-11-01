@@ -102,13 +102,6 @@ export function parseReflectionContext(snippet, paramValue) {
   // ── 框架检测 ──
   ctx.framework = detectFramework(snippet);
 
-  // React/Vue/Angular 自动 HTML 转义的上下文不可利用（除非 v-html / dangerouslySetInnerHTML）
-  if (detectFrameworkAutoEscape(snippet, ctx.framework)) {
-    ctx.autoEscaped = true;
-    ctx.exploitability = 0;
-    return ctx;
-  }
-
   // ── 上下文分类 ──
   if (snippetType === 'html_reflection') {
     classifyHtmlContext(ctx, before, after);
@@ -118,6 +111,19 @@ export function parseReflectionContext(snippet, paramValue) {
     classifySinkContext(ctx, fullSnippet);
   } else {
     classifyHtmlContext(ctx, before, after);
+  }
+
+  // ── 框架自动转义抑制(收窄) ──
+  // 只对框架真正会 HTML 转义的文本插值上下文(HTML_BODY)抑制。JS 字符串 / 模板 /
+  // DOM sink / 属性上下文的数据流绕过了框架的 JSX/模板转义(例如内联脚本里
+  // el.innerHTML = 参数),页面用没用框架都不该因此判为不可利用——旧逻辑对所有
+  // 上下文一律清零,是过度抑制、造成漏报。除非 v-html / dangerouslySetInnerHTML。
+  if (ctx.framework !== 'none' &&
+      ctx.contextType === CTX.HTML_BODY &&
+      detectFrameworkAutoEscape(snippet, ctx.framework)) {
+    ctx.autoEscaped = true;
+    ctx.exploitability = 0;
+    return ctx;
   }
 
   // 计算可利用性评分
